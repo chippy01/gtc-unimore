@@ -54,6 +54,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from utils.mask_utils import masked_mean
+
 
 class HDRFLIPLoss(nn.Module):
 	""" Class for computing HDR-FLIP """
@@ -141,7 +143,7 @@ class LDRFLIPLoss(nn.Module):
 		self.pt = 0.95
 		self.eps = 1e-15
 
-	def forward(self, test, reference, pixels_per_degree=(0.7 * 3840 / 0.7) * np.pi / 180):
+	def forward(self, test, reference, pixels_per_degree=(0.7 * 3840 / 0.7) * np.pi / 180, mask=None):
 		"""
 		Computes the LDR-FLIP error map between two LDR images,
 		assuming the images are observed at a certain number of
@@ -151,6 +153,7 @@ class LDRFLIPLoss(nn.Module):
 		:param reference: reference tensor (with NxCxHxW layout with values in the range [0, 1] in the sRGB color space)
 		:param pixels_per_degree: float describing the number of pixels per degree of visual angle of the observer,
 								  default corresponds to viewing the images on a 0.7 meters wide 4K monitor at 0.7 meters from the display
+		:param mask: optional bool tensor (broadcastable to Nx1xHxW) selecting the pixels to average the error over
 		:return: float containing the mean FLIP error (in the range [0,1]) between the LDR reference and test images in the batch
 		"""
 		# LDR-FLIP expects non-NaN values in [0,1] as input
@@ -163,7 +166,7 @@ class LDRFLIPLoss(nn.Module):
 
 		deltaE = compute_ldrflip(test_opponent, reference_opponent, pixels_per_degree, self.qc, self.qf, self.pc, self.pt, self.eps)
 
-		return torch.mean(deltaE)
+		return masked_mean(deltaE, mask)
 
 
 def compute_ldrflip(test, reference, pixels_per_degree, qc, qf, pc, pt, eps):

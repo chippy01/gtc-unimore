@@ -32,6 +32,13 @@ def get_log_dir(args):
     folder = f"{gaussian_cfg}_{loss_cfg}"
     if args.downsample:
         folder += f"_ds-{args.downsample_ratio:.1f}"
+    if args.empty_mode != "none":
+        folder += f"_empty-{args.empty_mode}"
+        if args.empty_mode != "uv":
+            folder += f"-{args.empty_detail_tol if args.empty_mode == 'blurred' else args.empty_tol:.2f}"
+        folder += f"-dil-{args.empty_dilate:d}"
+        if args.empty_eval_only:
+            folder += "-evalonly"
     if not args.disable_lr_schedule:
         folder += f"_decay-{args.max_decay_times:d}-{args.decay_ratio:.1f}"
     if not args.disable_prog_optim:

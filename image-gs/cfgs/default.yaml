@@ -25,6 +25,12 @@ data_root:             "media"
 input_path:            "images/anime-1_2k.png" # Path to an image file or a directory containing a texture stack
 downsample:            False # Load a downsampled version of the input image or texture stack as the optimization target to evaluate image upsampling performance
 downsample_ratio:      2.0
+# Empty texture areas
+empty_mode:            "none" # How unused texels are represented, valid values include "none", "grey", "black", "white", "blurred", and "uv" (rasterize the UV charts of the .obj next to the texture)
+empty_tol:             2.0 # Flat fills (grey, black, white): max per-channel distance from the fill colour in 8-bit levels
+empty_detail_tol:      0.25 # Blurred fill: max local detail in 8-bit levels, depends strongly on the texture, check the saved mask
+empty_dilate:          2 # Keep this many pixels of empty texels around used areas so that filtering at chart borders stays correct
+empty_eval_only:       False # Ignore empty areas only in the metrics but still optimize every pixel (baseline for comparison)
 # Gaussians
 num_gaussians:         10000 # Number of Gaussians (for compression rate control)
 init_scale:            5.0 # Initial Gaussian scale in number of pixels

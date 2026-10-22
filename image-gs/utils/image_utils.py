@@ -8,10 +8,13 @@ import matplotlib.font_manager as font_manager
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from fused_ssim import FusedSSIMMap
 from matplotlib.patches import Ellipse
 from numpy.linalg import norm
 from PIL import Image
 from scipy.ndimage import sobel
+
+from utils.mask_utils import masked_mean
 
 FONT_PATH = "assets/fonts/linux_libertine/LinLibertine_R.ttf"
 font_manager.fontManager.addfont(FONT_PATH)
@@ -34,12 +37,20 @@ GAUSSIAN_ZOOM = 5
 GAUSSIAN_COLOR = "#80ed99"
 
 
-def get_psnr(image1, image2, max_value=1.0):
-    mse = torch.mean((image1-image2)**2)
+def get_psnr(image1, image2, max_value=1.0, mask=None):
+    mse = masked_mean((image1-image2)**2, mask)
     if mse.item() <= 1e-7:
         return float('inf')
     psnr = 20*torch.log10(max_value/torch.sqrt(mse))
     return psnr
+
+
+def get_ssim_map(image1, image2, train=True):
+    """
+    Per-pixel SSIM [C, H, W] between two [C, H, W] images, same as fused_ssim() before averaging.
+    """
+    ssim_map = FusedSSIMMap.apply(0.01**2, 0.03**2, image1.unsqueeze(0).contiguous(), image2.unsqueeze(0), "same", train)
+    return ssim_map.squeeze(dim=0)
 
 
 def get_grid(h, w, x_lim=np.asarray([0, 1]), y_lim=np.asarray([0, 1])):
