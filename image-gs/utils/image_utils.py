@@ -16,7 +16,8 @@ from scipy.ndimage import sobel
 
 from utils.mask_utils import masked_mean
 
-FONT_PATH = "assets/fonts/linux_libertine/LinLibertine_R.ttf"
+# Relative to this file, so that scripts outside image-gs/ (e.g. tools/) can import this module
+FONT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets/fonts/linux_libertine/LinLibertine_R.ttf")
 font_manager.fontManager.addfont(FONT_PATH)
 FONT_PROP = font_manager.FontProperties(fname=FONT_PATH).get_name()
 

@@ -8,6 +8,8 @@ Textures are compressed into a set of colored 2D Gaussians with [Image-GS](https
 |---|---|
 | `image-gs/` | Image-GS engine with the changes described below |
 | `image-gs/utils/mask_utils.py` | Empty-area detection (new) |
+| `image-gs/utils/gtc_utils.py` | Compressed `.gtc` file format (new) |
+| `tools/` | Standalone scripts: `.gtc` decoder and mask accuracy check (new), see [Tools](#tools) |
 | `image-gs/cfgs/default.yaml` | All settings and their defaults, every key is also a command-line flag |
 | `RWT78/`, `RWT79/`, `RWT81/`, `RWT85/` | Test textures with their meshes, from the *Real-World Textured Things* (RWTT) dataset. Not tracked by git, copy them in by hand |
 
@@ -37,7 +39,7 @@ python -c "import torch, gsplat, fused_ssim; print(torch.cuda.is_available())"  
 - The first run downloads a 233 MB AlexNet model into `image-gs/models/` for the LPIPS metric.
 
 ## Running
-Run every command from `image-gs/`, because the code loads its config and fonts by relative path. `--data_root=..` makes `--input_path` relative to the repository root.
+Run `main.py` from `image-gs/`, because it loads its config and writes its results relative to that folder. `--data_root=..` makes `--input_path` relative to the repository root. The scripts in `tools/` work from any folder.
 
 ```bash
 cd image-gs
@@ -96,21 +98,59 @@ Measured against masks rasterized from the meshes. "Used lost" is real content w
 | RWT85 | `black` | 44% | 57% | Unphotographed faces are pure black, so they are ignored too and render as smeared colour |
 | All | `uv` | 0% | 96–99.6% | Exact, the rest is the `--empty_dilate` margin |
 
+To reproduce these numbers or test other tolerances, use `tools/eval_masks.py` (see [Tools](#tools)).
+
 ### Notes
 - **RWT78** holds four separate atlases (`tex_0.png` … `tex_3.png`), not material maps of one surface. Run each file on its own instead of the folder.
 - **Metrics:** with a mask, PSNR, SSIM, LPIPS and FLIP count used texels only. MS-SSIM cannot be masked, so it is computed with empty texels set to the target, which flatters it slightly. Compare masked runs with `--empty_eval_only` runs, not with runs that use `--empty_mode=none`.
 - **Gaussians in empty areas:** a few percent of Gaussians can drift fully into empty space during training. Nothing pulls them back there, so they are wasted.
+
+## The compressed file
+Every training run ends by writing `gaussians.gtc` into its run folder. It holds the Gaussians, with each parameter bit-packed at its `--*_bits` precision, plus a header of about 70 bytes (resolution, image names and channels, settings). Its size is the real compressed size: 160.07 KB for 10000 Gaussians at 16 bits. For runs trained before this feature, repeat the training command with `--eval` to write it.
+
+`tools/decode.py` renders a `.gtc` file back into images. It needs only that file, no checkpoint and no original texture:
+
+```bash
+cd image-gs
+# PNG at the optimization resolution, next to the .gtc file
+python ../tools/decode.py results/rwt79/<run-folder>/gaussians.gtc
+# Any resolution, into another folder
+python ../tools/decode.py results/rwt79/<run-folder>/gaussians.gtc --render_height=8192 --out_dir=../view/rwt79
+```
+
+- Images are named after the original textures (e.g. `ufo_crashste_brno_DiffuseMap.png`), so they can be placed next to a copy of the mesh's `.obj` and `.mtl` to view the compressed texture in Blender.
+- Existing files are only replaced with `--overwrite`. Never combine `--overwrite` with an `--out_dir` that holds the original textures.
+- `--format=png` (default) writes lossless 16-bit PNGs, `--format=jpg` writes 8-bit JPEGs.
+- The decoded images match the `--eval` renders. `render_res-*` is saved just before training quantizes the final checkpoint, so it can differ slightly (well under one 8-bit level on average). The final metrics in the log are measured after that step, so they describe the `.gtc` file.
+
+## Tools
+Standalone scripts in `tools/`. They need the `image-gs` conda environment and work from any folder. The examples below run from the repository root.
+
+| Script | Purpose |
+|---|---|
+| `decode.py` | Render a `.gtc` file into images, see [The compressed file](#the-compressed-file) |
+| `eval_masks.py` | Score empty-area detection against the exact UV mask rasterized from the texture's mesh |
+
+```bash
+# One mode, with its default tolerance from image-gs/cfgs/default.yaml
+python tools/eval_masks.py RWT85 --mode black
+# Several tolerances in one go
+python tools/eval_masks.py RWT79 --mode blurred --tol 0.25 0.5 0.75
+```
+
+For each image, `eval_masks.py` prints the share of ignored texels, of used texels wrongly ignored ("used lost") and of unused texels caught ("empty found"). `--dilate` matches `main.py --empty_dilate`. The texture's folder must contain exactly one `.obj` file.
 
 ## Outputs
 Each run writes to `image-gs/results/<exp_name>/<settings>/`. The settings part of the name includes the empty-area options (e.g. `..._empty-uv-dil-2_...`), so runs with different settings never overwrite each other. **Rerunning with identical settings deletes the previous run folder.**
 
 | File | Content |
 |---|---|
-| `render_res-<H>x<W>.jpg` | Final reconstruction |
+| `gaussians.gtc` | Compressed texture, input for `tools/decode.py` |
+| `render_res-<H>x<W>.jpg` | Final reconstruction (`.png` with `--save_image_format=png`) |
 | `gt_res-<H>x<W>.jpg`, `mask_res-<H>x<W>.jpg` | Target texture and empty-area mask |
 | `log_train.txt` | Size, compression rate, metrics during training |
 | `checkpoints/ckpt_step-<N>.pt` | Optimized Gaussians and final metrics |
-| `eval/` | Renders made with `--eval` |
+| `eval/` | Renders made with `--eval` (which also rewrites `gaussians.gtc`) |
 
 ## Credits
 - Image-GS: Zhang et al., *Image-GS: Content-Adaptive Image Representation via 2D Gaussians*, SIGGRAPH 2025, MIT license (see `image-gs/README.md` and `image-gs/LICENSE`).

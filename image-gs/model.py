@@ -19,6 +19,7 @@ from gsplat import (
     rasterize_gaussians_sum,
 )
 from utils.flip import LDRFLIPLoss
+from utils.gtc_utils import GaussianImage, save_gtc
 from utils.image_utils import (
     compute_image_gradients,
     get_grid,
@@ -40,6 +41,38 @@ from utils.saliency_utils import get_smap
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
 warnings.filterwarnings("ignore", category=FutureWarning, module="torchvision")
 warnings.filterwarnings("ignore", category=FutureWarning, module="lpips")
+
+
+def get_pixel_scale(scale, inverse_scale=True, upsample_ratio=None):
+    if inverse_scale:
+        scale = 1.0 / scale
+    if upsample_ratio is not None:
+        scale = upsample_ratio * scale
+    return scale
+
+
+def render_gaussians(xy, scale, rot, feat, img_h, img_w, tile_bounds, block_h, block_w, bits=None,
+                     enable_tiles=True, enable_topk_norm=True, benchmark=False):
+    """
+    Render Gaussians (scale in pixels) into a [C, img_h, img_w] image, shared by training and tools/decode.py.
+    bits: bit precisions of (position, scale, rotation, feature), or None to render at full precision.
+    """
+    if bits is not None:
+        xy, scale, rot, feat = [ste_quantize(param, num_bits) for param, num_bits in zip((xy, scale, rot, feat), bits)]
+    begin = perf_counter()
+    tmp = project_gaussians_2d_scale_rot(xy, scale, rot, img_h, img_w, tile_bounds)
+    xy, radii, conics, num_tiles_hit = tmp
+    if enable_tiles:
+        tmp = xy, radii, conics, num_tiles_hit, feat, img_h, img_w, block_h, block_w, enable_topk_norm
+        out_image = rasterize_gaussians_sum(*tmp)
+    else:
+        tmp = xy, conics, feat, img_h, img_w
+        out_image = rasterize_gaussians_no_tiles(*tmp)
+    render_time = perf_counter() - begin
+    if benchmark:
+        return render_time
+    out_image = out_image.view(-1, img_h, img_w, feat.shape[-1]).permute(0, 3, 1, 2).contiguous()
+    return out_image.squeeze(dim=0), render_time
 
 
 class GaussianSplatting2D(nn.Module):
@@ -167,6 +200,7 @@ class GaussianSplatting2D(nn.Module):
         self.scale_bits = args.scale_bits
         self.rot_bits = args.rot_bits
         self.feat_bits = args.feat_bits
+        self.param_bits = (self.pos_bits, self.scale_bits, self.rot_bits, self.feat_bits) if self.quantize else None
 
     def _init_gaussians(self, args):
         self.num_gaussians = args.num_gaussians
@@ -341,6 +375,18 @@ class GaussianSplatting2D(nn.Module):
             f"PSNR: {psnr:.2f} | SSIM: {ssim:.4f} | LPIPS: {self.lpips_final:.4f} | FLIP: {self.flip_final:.4f} | MS-SSIM: {self.msssim_final:.4f}")
         self.worklog.info("***********************************************")
 
+    def save_gaussians(self):
+        """Write the compressed representation: everything tools/decode.py needs to render the texture."""
+        path = f"{self.log_dir}/gaussians.gtc"
+        params = [param.detach().cpu().numpy() for param in (self.xy, self.scale, self.rot, self.feat)]
+        gaussians = GaussianImage(*params, bits=self.param_bits, img_h=self.img_h, img_w=self.img_w,
+                                  input_channels=self.input_channels, image_fnames=self.image_fnames, gamma=self.gamma,
+                                  inverse_scale=not self.disable_inverse_scale, topk_norm=not self.disable_topk_norm,
+                                  tiles=not self.disable_tiles)
+        save_gtc(path, gaussians)
+        self.worklog.info(f"Gaussians saved to '{path}' ({os.path.getsize(path)/1e3:.2f} KB)")
+        self.worklog.info("***********************************************")
+
     def _quantize(self):
         with torch.no_grad():
             self.xy.copy_(ste_quantize(self.xy, self.pos_bits))
@@ -383,33 +429,12 @@ class GaussianSplatting2D(nn.Module):
 
     def forward(self, img_h, img_w, tile_bounds, upsample_ratio=None, benchmark=False):
         scale = self._get_scale(upsample_ratio=upsample_ratio)
-        xy, rot, feat = self.xy, self.rot, self.feat
-        if self.quantize:
-            xy, scale, rot, feat = ste_quantize(xy, self.pos_bits), ste_quantize(
-                scale, self.scale_bits), ste_quantize(rot, self.rot_bits), ste_quantize(feat, self.feat_bits)
-        begin = perf_counter()
-        tmp = project_gaussians_2d_scale_rot(xy, scale, rot, img_h, img_w, tile_bounds)
-        xy, radii, conics, num_tiles_hit = tmp
-        if not self.disable_tiles:
-            enable_topk_norm = not self.disable_topk_norm
-            tmp = xy, radii, conics, num_tiles_hit, feat, img_h, img_w, self.block_h, self.block_w, enable_topk_norm
-            out_image = rasterize_gaussians_sum(*tmp)
-        else:
-            tmp = xy, conics, feat, img_h, img_w
-            out_image = rasterize_gaussians_no_tiles(*tmp)
-        render_time = perf_counter() - begin
-        if benchmark:
-            return render_time
-        out_image = out_image.view(-1, img_h, img_w, self.feat_dim).permute(0, 3, 1, 2).contiguous()
-        return out_image.squeeze(dim=0), render_time
+        return render_gaussians(self.xy, scale, self.rot, self.feat, img_h, img_w, tile_bounds, self.block_h, self.block_w,
+                                bits=self.param_bits, enable_tiles=not self.disable_tiles,
+                                enable_topk_norm=not self.disable_topk_norm, benchmark=benchmark)
 
     def _get_scale(self, upsample_ratio=None):
-        scale = self.scale
-        if not self.disable_inverse_scale:
-            scale = 1.0 / scale
-        if upsample_ratio is not None:
-            scale = upsample_ratio * scale
-        return scale
+        return get_pixel_scale(self.scale, inverse_scale=not self.disable_inverse_scale, upsample_ratio=upsample_ratio)
 
     def _visualize_gaussian_id(self, img_h, img_w, tile_bounds, upsample_ratio=None):
         scale = self._get_scale(upsample_ratio=upsample_ratio)
@@ -470,6 +495,7 @@ class GaussianSplatting2D(nn.Module):
         with torch.no_grad():
             self._log_images(log_final=True, plot_gaussians=self.vis_gaussians)
             self._save_model()
+        self.save_gaussians()
         self.worklog.info("Optimization completed")
         self.worklog.info("***********************************************")
         self.worklog.info(f"Mean scale: {self._get_scale().mean().item():.4f} (pixel) | {self.scale.mean().item():.4f} (raw)")

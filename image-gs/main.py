@@ -51,6 +51,7 @@ def main(args):
     ImageGS = GaussianSplatting2D(args)
     if args.eval:
         ImageGS.render(render_height=args.render_height)
+        ImageGS.save_gaussians()
     else:
         ImageGS.optimize()
 
