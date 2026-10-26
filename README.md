@@ -9,7 +9,9 @@ Textures are compressed into a set of colored 2D Gaussians with [Image-GS](https
 | `image-gs/` | Image-GS engine with the changes described below |
 | `image-gs/utils/mask_utils.py` | Empty-area detection (new) |
 | `image-gs/utils/gtc_utils.py` | Compressed `.gtc` file format (new) |
-| `tools/` | Standalone scripts: `.gtc` decoder and mask accuracy check (new), see [Tools](#tools) |
+| `tools/` | Standalone scripts: comparison against BC1/BC7/ASTC, `.gtc` decoder, mask accuracy check (new), see [Tools](#tools) |
+| `non_gaussian_compressions/` | BC1, BC7 and ASTC files written by the comparison. Not tracked by git |
+| `comparisons/` | Metrics tables and plots written by the comparison |
 | `image-gs/cfgs/default.yaml` | All settings and their defaults, every key is also a command-line flag |
 | `RWT78/`, `RWT79/`, `RWT81/`, `RWT85/` | Test textures with their meshes, from the *Real-World Textured Things* (RWTT) dataset. Not tracked by git, copy them in by hand |
 
@@ -32,6 +34,8 @@ cd image-gs/gsplat
 pip install -e ".[dev]" --no-build-isolation --config-settings editable_mode=compat
 cd ..
 python -c "import torch, gsplat, fused_ssim; print(torch.cuda.is_available())"   # should print True
+# Only for the comparison against BC1, BC7 and ASTC
+pip install --only-binary=:all: etcpak==0.9.15 texture2ddecoder==1.0.6 astc-encoder-py==0.1.12
 ```
 
 - `TORCH_CUDA_ARCH_LIST=8.6` matches RTX 30xx GPUs. Use e.g. `8.9` for RTX 40xx.
@@ -123,11 +127,45 @@ python ../tools/decode.py results/rwt79/<run-folder>/gaussians.gtc --render_heig
 - `--format=png` (default) writes lossless 16-bit PNGs, `--format=jpg` writes 8-bit JPEGs.
 - The decoded images match the `--eval` renders. `render_res-*` is saved just before training quantizes the final checkpoint, so it can differ slightly (well under one 8-bit level on average). The final metrics in the log are measured after that step, so they describe the `.gtc` file.
 
+## Comparing against BC1, BC7 and ASTC
+`tools/compare_compression.sh` compresses a texture with Image-GS and with the standard GPU texture formats, scores every result on the same mask, and plots quality against size. Run it from any folder (it activates the conda environment itself):
+
+```bash
+tools/compare_compression.sh RWT79                         # defaults: 2500 to 40000 Gaussians, 'uv' mask
+tools/compare_compression.sh -g "5000 20000" -m black RWT85
+tools/compare_compression.sh -m blurred -t 0.5 RWT79/ufo_crashste_brno_DiffuseMap.png
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-g` | `"2500 5000 10000 20000 40000"` | Gaussian counts, one Image-GS training run each |
+| `-s` | `"1 2 4 8 16"` | Downscaling factors for BC/ASTC, `4` compresses the texture at 1/4 of its width and height |
+| `-m` | `uv` | Empty-area mode, used for training and for scoring every method |
+| `-t` | `main.py` default | Tolerance for `-m`: `--empty_detail_tol` for `blurred`, `--empty_tol` otherwise |
+
+Given a folder, every image in it is compared on its own (RWT78 gives four comparisons). An Image-GS run at 4096² takes about 7 minutes or more, and more Gaussians take longer. The BC/ASTC encodes take under a minute, and scoring about one more. Runs that already have a `gaussians.gtc` are reused, so after an interruption only the missing counts are trained. Delete a run folder to retrain it.
+
+| Folder | Content |
+|---|---|
+| `image-gs/results/compare/<texture>/<image>_empty-<mode>/` | One Image-GS run per Gaussian count |
+| `non_gaussian_compressions/<texture>/<image>/` | `<codec>_<W>x<H>.dds` / `.astc` files, their decoded `.png`, and `baselines.csv` |
+| `comparisons/<texture>/<image>/` | `metrics.csv` (every result), `rd_curves.png` (PSNR, SSIM, LPIPS, FLIP against bits per texel) and `sizes.png` (file size of every full-resolution result, next to the uncompressed size and the original file) |
+
+How results are measured:
+- **Size** is the compressed file on disk (`.gtc`, `.dds`, `.astc`, headers included), as bits per texel of the original resolution. No method stores mipmaps.
+- **Quality:** every method is decoded at the original resolution and scored against the original on the mask from `-m`, with the same metrics as training.
+- **Lower resolutions:** at full resolution, BC1 is 4 bpp, BC7 8 bpp and ASTC 8 to 0.89 bpp, far above Image-GS (about 0.02 to 0.3 bpp). A smaller texture is what an engine would ship at those sizes. Downscaling uses area filtering, like mipmaps, and decoded results are upscaled bilinearly, like GPU magnification.
+- **Encoders:** BC1 and BC7 by `etcpak` (BC7 through its bc7enc encoder at default settings), ASTC by ARM's `astc-encoder` at its *thorough* preset. Everything is decoded by the independent `texture2ddecoder`, and the `.dds` files also open correctly in Pillow. `etcpak`'s BC1 encoder is tuned for speed, so it scores about 1 dB below the best BC1 encoders.
+- **Very large textures** such as RWT81 (8196²) may not fit LPIPS and FLIP into 8 GB of GPU memory. Those values are then left empty, with a warning.
+
 ## Tools
 Standalone scripts in `tools/`. They need the `image-gs` conda environment and work from any folder. The examples below run from the repository root.
 
 | Script | Purpose |
 |---|---|
+| `compare_compression.sh` | Full comparison against BC1, BC7 and ASTC, see [above](#comparing-against-bc1-bc7-and-astc) |
+| `baseline_codecs.py` | BC1, BC7 and ASTC encoding at several resolutions (called by `compare_compression.sh`) |
+| `plot_compression.py` | Scoring and plotting of all methods (called by `compare_compression.sh`) |
 | `decode.py` | Render a `.gtc` file into images, see [The compressed file](#the-compressed-file) |
 | `eval_masks.py` | Score empty-area detection against the exact UV mask rasterized from the texture's mesh |
 

@@ -10,11 +10,14 @@ from utils.gtc_utils import load_gtc  # noqa: E402
 from utils.image_utils import save_image, separate_image_channels  # noqa: E402
 
 
-def main(args):
-    gaussians = load_gtc(args.gtc_file)
-    xy, scale, rot, feat = [torch.from_numpy(param).to(args.device) for param in
+def decode_gtc(gaussians, render_height=None, device="cuda:0"):
+    """
+    Render Gaussians loaded with load_gtc() into a [C, H, W] image, H defaults to the optimization resolution.
+    Returns the image and the rendering time.
+    """
+    xy, scale, rot, feat = [torch.from_numpy(param).to(device) for param in
                             (gaussians.xy, gaussians.scale, gaussians.rot, gaussians.feat)]
-    img_h = gaussians.img_h if args.render_height is None else args.render_height
+    img_h = gaussians.img_h if render_height is None else render_height
     img_w = round((float(img_h)/gaussians.img_h)*gaussians.img_w)
     block_h, block_w = 16, 16  # Warning: Must match hardcoded value in CUDA kernel, modify with caution
     tile_bounds = ((img_w + block_w - 1) // block_w, (img_h + block_h - 1) // block_h, 1)
@@ -25,7 +28,13 @@ def main(args):
         num_prep_runs = 2
         for _ in range(num_prep_runs):
             render_gaussians(*render_args, **render_kwargs, benchmark=True)
-        images, render_time = render_gaussians(*render_args, **render_kwargs)
+        return render_gaussians(*render_args, **render_kwargs)
+
+
+def main(args):
+    gaussians = load_gtc(args.gtc_file)
+    images, render_time = decode_gtc(gaussians, render_height=args.render_height, device=args.device)
+    img_h, img_w = images.shape[1:]
     out_dir = os.path.dirname(os.path.abspath(args.gtc_file)) if args.out_dir is None else args.out_dir
     os.makedirs(out_dir, exist_ok=True)
     # Images keep their original names, so they can replace the original textures of a mesh
