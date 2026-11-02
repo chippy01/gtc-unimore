@@ -80,6 +80,7 @@ __global__ void nd_rasterize_forward(
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
     const float3* __restrict__ conics,
+    const float* __restrict__ b,
     const float* __restrict__ colors,
     float* __restrict__ out_img
 ) {
@@ -106,16 +107,17 @@ __global__ void nd_rasterize_forward(
     __shared__ int32_t id_batch[BLOCK_SIZE];
     __shared__ float2 xy_batch[BLOCK_SIZE];
     __shared__ float3 conic_batch[BLOCK_SIZE];
+    __shared__ float b_batch[BLOCK_SIZE];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
     int tr = block.thread_rank();
-    
+
     // **** max 12 channels for speed ***
     float pix_out[MAX_CHANNELS] = {0.f};
 
-    for (int b = 0; b < num_batches; ++b) {
+    for (int batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
         if (__syncthreads_count(done) >= BLOCK_SIZE) {
@@ -124,7 +126,7 @@ __global__ void nd_rasterize_forward(
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        int batch_start = range.x + BLOCK_SIZE * b;
+        int batch_start = range.x + BLOCK_SIZE * batch_idx;
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
@@ -132,6 +134,7 @@ __global__ void nd_rasterize_forward(
             const float2 xy = xys[g_id];
             xy_batch[tr] = {xy.x, xy.y};
             conic_batch[tr] = conics[g_id];
+            b_batch[tr] = b[g_id];
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -146,15 +149,15 @@ __global__ void nd_rasterize_forward(
             const float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                         conic.z * delta.y * delta.y) +
                                         conic.y * delta.x * delta.y;
-            
+
             if (sigma < 0.f || isnan(sigma) || isinf(sigma)) {
                 continue;
             }
-            
-            const float alpha = __expf(-sigma);
+
+            const float alpha = beta_kernel_alpha(sigma, b_batch[t]);
             int32_t g = id_batch[t];
             const float vis = alpha;
-            
+
             for (int c = 0; c < channels; ++c) {
                 pix_out[c] += colors[g * channels + c] * vis;
             }
@@ -176,6 +179,7 @@ __global__ void nd_rasterize_forward_topk_norm(
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
     const float3* __restrict__ conics,
+    const float* __restrict__ b,
     const float* __restrict__ colors,
     float* __restrict__ out_img,
     int* __restrict__ pixel_topk
@@ -203,22 +207,23 @@ __global__ void nd_rasterize_forward_topk_norm(
     __shared__ int32_t id_batch[BLOCK_SIZE];
     __shared__ float2 xy_batch[BLOCK_SIZE];
     __shared__ float3 conic_batch[BLOCK_SIZE];
+    __shared__ float b_batch[BLOCK_SIZE];
 
     // collect and process batches of gaussians
     // each thread loads one gaussian at a time before rasterizing its
     // designated pixel
     int tr = block.thread_rank();
-    
+
     // **** max 12 channels for speed ***
     float pix_out[MAX_CHANNELS] = {0.f};
-    
+
     // top k Gaussian ids
     int32_t topk[TOP_K];
     float topk_vals[TOP_K] = {0.f};
     for (int k = 0; k < TOP_K; ++k)
         topk[k] = -1;
 
-    for (int b = 0; b < num_batches; ++b) {
+    for (int batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
         // resync all threads before beginning next batch
         // end early if entire tile is done
         if (__syncthreads_count(done) >= BLOCK_SIZE) {
@@ -227,7 +232,7 @@ __global__ void nd_rasterize_forward_topk_norm(
 
         // each thread fetch 1 gaussian from front to back
         // index of gaussian to load
-        int batch_start = range.x + BLOCK_SIZE * b;
+        int batch_start = range.x + BLOCK_SIZE * batch_idx;
         int idx = batch_start + tr;
         if (idx < range.y) {
             int32_t g_id = gaussian_ids_sorted[idx];
@@ -235,6 +240,7 @@ __global__ void nd_rasterize_forward_topk_norm(
             const float2 xy = xys[g_id];
             xy_batch[tr] = {xy.x, xy.y};
             conic_batch[tr] = conics[g_id];
+            b_batch[tr] = b[g_id];
         }
 
         // wait for other threads to collect the gaussians in batch
@@ -249,12 +255,12 @@ __global__ void nd_rasterize_forward_topk_norm(
             const float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                         conic.z * delta.y * delta.y) +
                                         conic.y * delta.x * delta.y;
-            
+
             if (sigma < 0.f || isnan(sigma) || isinf(sigma)) {
                 continue;
             }
-            
-            const float alpha = __expf(-sigma);
+
+            const float alpha = beta_kernel_alpha(sigma, b_batch[t]);
             int32_t g = id_batch[t];
 
             // find the minimum value in topk
@@ -308,6 +314,7 @@ __global__ void nd_rasterize_forward_no_tiles(
     const unsigned num_points,
     const float2* __restrict__ xys,
     const float3* __restrict__ conics,
+    const float* __restrict__ b,
     const float* __restrict__ colors,
     float* __restrict__ out_img,
     int* __restrict__ pixel_topk
@@ -340,12 +347,12 @@ __global__ void nd_rasterize_forward_no_tiles(
         const float sigma = 0.5f * (conic.x * delta.x * delta.x +
                                     conic.z * delta.y * delta.y) +
                                     conic.y * delta.x * delta.y;
-        
+
         if (sigma < 0.f || isnan(sigma) || isinf(sigma)) {
             continue;
         }
-        
-        const float alpha = __expf(-sigma);
+
+        const float alpha = beta_kernel_alpha(sigma, b[g]);
         int32_t g_id = g;
 
         // find the minimum value in topk

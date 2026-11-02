@@ -13,16 +13,19 @@ def get_gaussian_cfg(args):
     else:
         gaussian_cfg += f"_inv-scale-{args.init_scale:.1f}"
     if not args.quantize:
-        args.pos_bits, args.scale_bits, args.rot_bits, args.feat_bits = 32, 32, 32, 32
-    min_bits = min(args.pos_bits, args.scale_bits, args.rot_bits, args.feat_bits)
-    max_bits = max(args.pos_bits, args.scale_bits, args.rot_bits, args.feat_bits)
+        args.pos_bits, args.scale_bits, args.rot_bits, args.feat_bits, args.beta_bits = 32, 32, 32, 32, 32
+    min_bits = min(args.pos_bits, args.scale_bits, args.rot_bits, args.feat_bits, args.beta_bits)
+    max_bits = max(args.pos_bits, args.scale_bits, args.rot_bits, args.feat_bits, args.beta_bits)
     if min_bits < 4 or max_bits > 32:
         raise ValueError(
-            f"Bit precision must be between 4 and 32 but got: {args.pos_bits:d}, {args.scale_bits:d}, {args.rot_bits:d}, {args.feat_bits:d}")
-    gaussian_cfg += f"_bits-{args.pos_bits:d}-{args.scale_bits:d}-{args.rot_bits:d}-{args.feat_bits:d}"
+            f"Bit precision must be between 4 and 32 but got: {args.pos_bits:d}, {args.scale_bits:d}, {args.rot_bits:d}, "
+            f"{args.feat_bits:d}, {args.beta_bits:d}")
+    gaussian_cfg += f"_bits-{args.pos_bits:d}-{args.scale_bits:d}-{args.rot_bits:d}-{args.feat_bits:d}-{args.beta_bits:d}"
     if not args.disable_topk_norm:
         gaussian_cfg += f"_top-{args.topk:d}"
     gaussian_cfg += f"_{args.init_mode[0]}-{args.init_random_ratio:.1f}"
+    if not args.disable_beta:
+        gaussian_cfg += "_beta"
     return gaussian_cfg
 
 

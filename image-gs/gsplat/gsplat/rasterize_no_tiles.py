@@ -13,6 +13,7 @@ import gsplat.cuda as _C
 def rasterize_gaussians_no_tiles(
     xys: Float[Tensor, "*batch 2"],
     conics: Float[Tensor, "*batch 3"],
+    b: Float[Tensor, "*batch 1"],
     colors: Float[Tensor, "*batch channels"],
     img_height: int,
     img_width: int
@@ -30,6 +31,7 @@ def rasterize_gaussians_no_tiles(
     return _RasterizeGaussiansNoTiles.apply(
         xys.contiguous(),
         conics.contiguous(),
+        b.contiguous(),
         colors.contiguous(),
         img_height,
         img_width
@@ -44,6 +46,7 @@ class _RasterizeGaussiansNoTiles(Function):
         ctx,
         xys: Float[Tensor, "*batch 2"],
         conics: Float[Tensor, "*batch 3"],
+        b: Float[Tensor, "*batch 1"],
         colors: Float[Tensor, "*batch channels"],
         img_height: int,
         img_width: int
@@ -59,11 +62,13 @@ class _RasterizeGaussiansNoTiles(Function):
             num_points,
             xys,
             conics,
+            b,
             colors
         )
         ctx.save_for_backward(
             xys,
             conics,
+            b,
             colors,
             pixel_topk.contiguous()
         )
@@ -74,18 +79,20 @@ class _RasterizeGaussiansNoTiles(Function):
     def backward(ctx, v_out_img):
         img_height = ctx.img_height
         img_width = ctx.img_width
-        
+
         (
             xys,
             conics,
+            b,
             colors,
             pixel_topk
         ) = ctx.saved_tensors
-        v_xy, v_conic, v_colors = _C.nd_rasterize_backward_no_tiles(
+        v_xy, v_conic, v_b, v_colors = _C.nd_rasterize_backward_no_tiles(
             img_height,
             img_width,
             xys,
             conics,
+            b,
             colors,
             v_out_img,
             pixel_topk
@@ -94,6 +101,7 @@ class _RasterizeGaussiansNoTiles(Function):
         return (
             v_xy,  # xys
             v_conic,  # conics
+            v_b,  # b
             v_colors,  # colors
             None,  # img_height
             None,  # img_width

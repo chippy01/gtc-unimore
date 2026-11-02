@@ -9,6 +9,7 @@ Textures are compressed into a set of colored 2D Gaussians with [Image-GS](https
 | `image-gs/` | Image-GS engine with the changes described below |
 | `image-gs/utils/mask_utils.py` | Empty-area detection (new) |
 | `image-gs/utils/gtc_utils.py` | Compressed `.gtc` file format (new) |
+| `image-gs/gsplat/gsplat/cuda/csrc/{forward,backward}.cu` | Rasterizer kernels, extended with the Beta Splatting kernel (see [Beta Splatting](#beta-splatting)) |
 | `tools/` | Standalone scripts: comparison against BC1/BC7/ASTC, `.gtc` decoder, mask accuracy check (new), see [Tools](#tools) |
 | `non_gaussian_compressions/` | BC1, BC7 and ASTC files written by the comparison. Not tracked by git |
 | `comparisons/` | Metrics tables and plots written by the comparison |
@@ -108,6 +109,25 @@ To reproduce these numbers or test other tolerances, use `tools/eval_masks.py` (
 - **RWT78** holds four separate atlases (`tex_0.png` … `tex_3.png`), not material maps of one surface. Run each file on its own instead of the folder.
 - **Metrics:** with a mask, PSNR, SSIM, LPIPS and FLIP count used texels only. MS-SSIM cannot be masked, so it is computed with empty texels set to the target, which flatters it slightly. Compare masked runs with `--empty_eval_only` runs, not with runs that use `--empty_mode=none`.
 - **Gaussians in empty areas:** a few percent of Gaussians can drift fully into empty space during training. Nothing pulls them back there, so they are wasted.
+
+## Beta Splatting
+Each Gaussian carries one extra learnable scalar `b` that reshapes its density from a fixed Gaussian into a bounded [Beta kernel](https://rongliu-leo.github.io/beta-splatting/) (Liu et al., 2025): `alpha = (1 - r^2)^beta(b)`, `beta(b) = 4*exp(b)`, zero once `r` (the Mahalanobis distance to the Gaussian's own covariance ellipse) reaches 1. `b=0` is close to a plain Gaussian; negative `b` gives flatter shapes with a sharp cutoff (good for solid regions and hard edges, e.g. mesh UV borders); positive `b` gives sharper peaks (good for fine detail and noise, which scan-derived textures have plenty of). Unlike upstream Gaussians, the kernel's own support is bounded, so training can no longer rely on an infinite tail.
+
+```bash
+python main.py --data_root=.. --input_path="RWT79" --exp_name="rwt79" --num_gaussians=10000 --quantize
+# Ablation: freeze b=0 for every Gaussian, equivalent to upstream's plain Gaussian kernel
+python main.py --data_root=.. --input_path="RWT79" --exp_name="rwt79" --num_gaussians=10000 --quantize --disable_beta
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--disable_beta` | off | Freeze every Gaussian's `b` at 0 instead of learning it (ablation baseline, pure Gaussian shape) |
+| `--beta_lr` | `2.0e-3` | Learning rate for `b` |
+| `--beta_bits` | `16` | Bit precision of `b` when `--quantize` is set |
+
+`b` is stored and bit-packed in `gaussians.gtc` and checkpoints like any other Gaussian parameter, so `--disable_beta` costs a small amount of compressed size (its bits are still spent, just on a value fixed at 0) in exchange for a simpler ablation path.
+
+**Caution:** the CUDA rasterizer (`image-gs/gsplat/gsplat/cuda/csrc/{forward,backward}.cu`) was edited by hand to implement the Beta kernel and its gradient; it has not been compiled or run yet (no CUDA toolchain on the machine that wrote this). Rebuild gsplat (`cd image-gs/gsplat && pip install -e ".[dev]" --no-build-isolation --config-settings editable_mode=compat`) before trusting it, and watch for NaNs in early training if `b` drifts to extreme values.
 
 ## The compressed file
 Every training run ends by writing `gaussians.gtc` into its run folder. It holds the Gaussians, with each parameter bit-packed at its `--*_bits` precision, plus a header of about 70 bytes (resolution, image names and channels, settings). Its size is the real compressed size: 160.07 KB for 10000 Gaussians at 16 bits. For runs trained before this feature, repeat the training command with `--eval` to write it.

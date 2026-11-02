@@ -51,22 +51,24 @@ def get_pixel_scale(scale, inverse_scale=True, upsample_ratio=None):
     return scale
 
 
-def render_gaussians(xy, scale, rot, feat, img_h, img_w, tile_bounds, block_h, block_w, bits=None,
+def render_gaussians(xy, scale, rot, feat, b, img_h, img_w, tile_bounds, block_h, block_w, bits=None,
                      enable_tiles=True, enable_topk_norm=True, benchmark=False):
     """
     Render Gaussians (scale in pixels) into a [C, img_h, img_w] image, shared by training and tools/decode.py.
-    bits: bit precisions of (position, scale, rotation, feature), or None to render at full precision.
+    b: per-Gaussian Beta-kernel shape parameter (see utils.quantization_utils and the CUDA rasterizer), b=0 is
+       close to a plain Gaussian.
+    bits: bit precisions of (position, scale, rotation, feature, beta), or None to render at full precision.
     """
     if bits is not None:
-        xy, scale, rot, feat = [ste_quantize(param, num_bits) for param, num_bits in zip((xy, scale, rot, feat), bits)]
+        xy, scale, rot, feat, b = [ste_quantize(param, num_bits) for param, num_bits in zip((xy, scale, rot, feat, b), bits)]
     begin = perf_counter()
     tmp = project_gaussians_2d_scale_rot(xy, scale, rot, img_h, img_w, tile_bounds)
     xy, radii, conics, num_tiles_hit = tmp
     if enable_tiles:
-        tmp = xy, radii, conics, num_tiles_hit, feat, img_h, img_w, block_h, block_w, enable_topk_norm
+        tmp = xy, radii, conics, num_tiles_hit, b, feat, img_h, img_w, block_h, block_w, enable_topk_norm
         out_image = rasterize_gaussians_sum(*tmp)
     else:
-        tmp = xy, conics, feat, img_h, img_w
+        tmp = xy, conics, b, feat, img_h, img_w
         out_image = rasterize_gaussians_no_tiles(*tmp)
     render_time = perf_counter() - begin
     if benchmark:
@@ -200,7 +202,8 @@ class GaussianSplatting2D(nn.Module):
         self.scale_bits = args.scale_bits
         self.rot_bits = args.rot_bits
         self.feat_bits = args.feat_bits
-        self.param_bits = (self.pos_bits, self.scale_bits, self.rot_bits, self.feat_bits) if self.quantize else None
+        self.beta_bits = args.beta_bits
+        self.param_bits = (self.pos_bits, self.scale_bits, self.rot_bits, self.feat_bits, self.beta_bits) if self.quantize else None
 
     def _init_gaussians(self, args):
         self.num_gaussians = args.num_gaussians
@@ -222,11 +225,14 @@ class GaussianSplatting2D(nn.Module):
         self.disable_topk_norm = args.disable_topk_norm
         self.disable_inverse_scale = args.disable_inverse_scale
         self.disable_color_init = args.disable_color_init
+        self.disable_beta = args.disable_beta
         self.xy = nn.Parameter(torch.rand(self.num_gaussians, 2, dtype=self.dtype, device=self.device), requires_grad=True)
         self.scale = nn.Parameter(torch.ones(self.num_gaussians, 2, dtype=self.dtype, device=self.device), requires_grad=True)
         self.rot = nn.Parameter(torch.zeros(self.num_gaussians, 1, dtype=self.dtype, device=self.device), requires_grad=True)
         self.feat_dim = sum(self.input_channels)
         self.feat = nn.Parameter(torch.rand(self.num_gaussians, self.feat_dim, dtype=self.dtype, device=self.device), requires_grad=True)
+        # Beta Splatting shape parameter (Liu et al., 2025): b=0 starts close to a plain Gaussian
+        self.b = nn.Parameter(torch.zeros(self.num_gaussians, 1, dtype=self.dtype, device=self.device), requires_grad=not self.disable_beta)
         self.vis_feat = nn.Parameter(torch.rand_like(self.feat), requires_grad=False)  # Only used for Gaussian ID visualization
         self._log_compression_rate()
 
@@ -241,7 +247,8 @@ class GaussianSplatting2D(nn.Module):
             bpp_uncompressed += float(num_channels) * bit_depth
         bppc_uncompressed = bpp_uncompressed / self.feat_dim
         self.worklog.info(f"Uncompressed: {bytes_uncompressed/1e3:.2f} KB | {bpp_uncompressed:.3f} bpp | {bppc_uncompressed:.3f} bppc")
-        bits_compressed = (2*self.pos_bits + 2*self.scale_bits + self.rot_bits + self.feat_dim*self.feat_bits) * self.total_num_gaussians
+        bits_compressed = (2*self.pos_bits + 2*self.scale_bits + self.rot_bits + self.feat_dim*self.feat_bits +
+                          self.beta_bits) * self.total_num_gaussians
         bytes_compressed = bits_compressed / 8.0
         bpp_compressed = float(bits_compressed) / self.num_pixels
         bppc_compressed = bpp_compressed / self.feat_dim
@@ -266,16 +273,23 @@ class GaussianSplatting2D(nn.Module):
         self.scale_lr = args.scale_lr
         self.rot_lr = args.rot_lr
         self.feat_lr = args.feat_lr
-        self.optimizer = torch.optim.Adam([{'params': self.xy, 'lr': self.pos_lr},
-                                           {'params': self.scale, 'lr': self.scale_lr},
-                                           {'params': self.rot, 'lr': self.rot_lr},
-                                           {'params': self.feat, 'lr': self.feat_lr}])
+        self.beta_lr = args.beta_lr
+        self.optimizer = self._build_optimizer()
         self.disable_lr_schedule = args.disable_lr_schedule
         if not self.disable_lr_schedule:
             self.decay_ratio = args.decay_ratio
             self.check_decay_steps = args.check_decay_steps
             self.max_decay_times = args.max_decay_times
             self.decay_threshold = args.decay_threshold
+
+    def _build_optimizer(self):
+        param_groups = [{'params': self.xy, 'lr': self.pos_lr},
+                        {'params': self.scale, 'lr': self.scale_lr},
+                        {'params': self.rot, 'lr': self.rot_lr},
+                        {'params': self.feat, 'lr': self.feat_lr}]
+        if not self.disable_beta:
+            param_groups.append({'params': self.b, 'lr': self.beta_lr})
+        return torch.optim.Adam(param_groups)
 
     def _init_pos_scale_feat(self, args):
         self.init_mode = args.init_mode
@@ -378,7 +392,7 @@ class GaussianSplatting2D(nn.Module):
     def save_gaussians(self):
         """Write the compressed representation: everything tools/decode.py needs to render the texture."""
         path = f"{self.log_dir}/gaussians.gtc"
-        params = [param.detach().cpu().numpy() for param in (self.xy, self.scale, self.rot, self.feat)]
+        params = [param.detach().cpu().numpy() for param in (self.xy, self.scale, self.rot, self.feat, self.b)]
         gaussians = GaussianImage(*params, bits=self.param_bits, img_h=self.img_h, img_w=self.img_w,
                                   input_channels=self.input_channels, image_fnames=self.image_fnames, gamma=self.gamma,
                                   inverse_scale=not self.disable_inverse_scale, topk_norm=not self.disable_topk_norm,
@@ -393,6 +407,7 @@ class GaussianSplatting2D(nn.Module):
             self.scale.copy_(ste_quantize(self.scale, self.scale_bits))
             self.rot.copy_(ste_quantize(self.rot, self.rot_bits))
             self.feat.copy_(ste_quantize(self.feat, self.feat_bits))
+            self.b.copy_(ste_quantize(self.b, self.beta_bits))
 
     def render(self, render_height=None):
         img_h, img_w = self.img_h, self.img_w
@@ -429,7 +444,7 @@ class GaussianSplatting2D(nn.Module):
 
     def forward(self, img_h, img_w, tile_bounds, upsample_ratio=None, benchmark=False):
         scale = self._get_scale(upsample_ratio=upsample_ratio)
-        return render_gaussians(self.xy, scale, self.rot, self.feat, img_h, img_w, tile_bounds, self.block_h, self.block_w,
+        return render_gaussians(self.xy, scale, self.rot, self.feat, self.b, img_h, img_w, tile_bounds, self.block_h, self.block_w,
                                 bits=self.param_bits, enable_tiles=not self.disable_tiles,
                                 enable_topk_norm=not self.disable_topk_norm, benchmark=benchmark)
 
@@ -438,19 +453,19 @@ class GaussianSplatting2D(nn.Module):
 
     def _visualize_gaussian_id(self, img_h, img_w, tile_bounds, upsample_ratio=None):
         scale = self._get_scale(upsample_ratio=upsample_ratio)
-        xy, rot, feat = self.xy, self.rot, self.feat
+        xy, rot, feat, b = self.xy, self.rot, self.feat, self.b
         if self.quantize:
-            xy, scale, rot, feat = ste_quantize(xy, self.pos_bits), ste_quantize(
-                scale, self.scale_bits), ste_quantize(rot, self.rot_bits), ste_quantize(feat, self.feat_bits)
+            xy, scale, rot, feat, b = ste_quantize(xy, self.pos_bits), ste_quantize(
+                scale, self.scale_bits), ste_quantize(rot, self.rot_bits), ste_quantize(feat, self.feat_bits), ste_quantize(b, self.beta_bits)
         feat = self.vis_feat * feat.norm(dim=-1, keepdim=True)
         tmp = project_gaussians_2d_scale_rot(xy, scale, rot, img_h, img_w, tile_bounds)
         xy, radii, conics, num_tiles_hit = tmp
         if not self.disable_tiles:
             enable_topk_norm = not self.disable_topk_norm
-            tmp = xy, radii, conics, num_tiles_hit, feat, img_h, img_w, self.block_h, self.block_w, enable_topk_norm
+            tmp = xy, radii, conics, num_tiles_hit, b, feat, img_h, img_w, self.block_h, self.block_w, enable_topk_norm
             out_image = rasterize_gaussians_sum(*tmp)
         else:
-            tmp = xy, conics, feat, img_h, img_w
+            tmp = xy, conics, b, feat, img_h, img_w
             out_image = rasterize_gaussians_no_tiles(*tmp)
         out_image = out_image.view(-1, img_h, img_w, self.feat_dim).permute(0, 3, 1, 2).contiguous()
         return out_image.squeeze(dim=0)
@@ -644,12 +659,14 @@ class GaussianSplatting2D(nn.Module):
         new_rot = torch.zeros(add_num, 1, dtype=self.dtype, device=self.device)
         new_feat = diff_map.permute(1, 2, 0).reshape(-1, self.feat_dim)[selected]
         new_vis_feat = torch.rand_like(new_feat)
+        new_b = torch.zeros(add_num, 1, dtype=self.dtype, device=self.device)  # b=0 is close to a plain Gaussian
         # Old Gaussians
         old_xy = self.xy.detach().clone()
         old_scale = self.scale.detach().clone()
         old_rot = self.rot.detach().clone()
         old_feat = self.feat.detach().clone()
         old_vis_feat = self.vis_feat.detach().clone()
+        old_b = self.b.detach().clone()
         # Update trainable parameters
         self.num_gaussians += add_num
         all_xy = torch.cat([old_xy, new_xy], dim=0)
@@ -657,11 +674,13 @@ class GaussianSplatting2D(nn.Module):
         all_rot = torch.cat([old_rot, new_rot], dim=0)
         all_feat = torch.cat([old_feat, new_feat], dim=0)
         all_vis_feat = torch.cat([old_vis_feat, new_vis_feat], dim=0)
+        all_b = torch.cat([old_b, new_b], dim=0)
         self.xy = nn.Parameter(all_xy, requires_grad=True)
         self.scale = nn.Parameter(all_scale, requires_grad=True)
         self.rot = nn.Parameter(all_rot, requires_grad=True)
         self.feat = nn.Parameter(all_feat, requires_grad=True)
         self.vis_feat = nn.Parameter(all_vis_feat, requires_grad=False)
+        self.b = nn.Parameter(all_b, requires_grad=not self.disable_beta)
         # Plot Gaussians
         if plot_gaussians:
             path = f"{self.train_dir}/add-gaussians_step-{self.step:d}_num-{self.num_gaussians:d}_res-{self.img_h:d}x{self.img_w:d}"
@@ -670,9 +689,6 @@ class GaussianSplatting2D(nn.Module):
             visualize_added_gaussians(path, raw_images, old_xy, new_xy, self.input_channels, size=size, every_n=every_n,
                                       alpha=0.8, gamma=self.gamma, save_image_format=self.save_plot_format)
         # Update optimizer
-        self.optimizer = torch.optim.Adam([{'params': self.xy, 'lr': self.pos_lr},
-                                           {'params': self.scale, 'lr': self.scale_lr},
-                                           {'params': self.rot, 'lr': self.rot_lr},
-                                           {'params': self.feat, 'lr': self.feat_lr}])
+        self.optimizer = self._build_optimizer()
         self.worklog.info(f"Step: {self.step:d} | Adding {add_num:d} Gaussians ({self.num_gaussians-add_num:d} -> {self.num_gaussians:d})")
         self.worklog.info("***********************************************")

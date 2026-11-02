@@ -45,6 +45,7 @@ std::tuple<
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
+    const torch::Tensor &b,
     const torch::Tensor &colors
 );
 
@@ -52,6 +53,7 @@ std::
     tuple<
         torch::Tensor, // dL_dxy
         torch::Tensor, // dL_dconic
+        torch::Tensor, // dL_db
         torch::Tensor  // dL_dcolors
         >
     nd_rasterize_backward_tensor(
@@ -63,13 +65,14 @@ std::
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
         const torch::Tensor &conics,
+        const torch::Tensor &b,
         const torch::Tensor &colors,
         const torch::Tensor &v_output  // dL_dout_color
     );
 
 std::tuple<
-    torch::Tensor, // out_img 
-    torch::Tensor  // pixel_topk 
+    torch::Tensor, // out_img
+    torch::Tensor  // pixel_topk
 > nd_rasterize_forward_topk_norm_tensor(
     const std::tuple<int, int, int> tile_bounds,
     const std::tuple<int, int, int> block,
@@ -78,6 +81,7 @@ std::tuple<
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
+    const torch::Tensor &b,
     const torch::Tensor &colors
 );
 
@@ -85,6 +89,7 @@ std::
     tuple<
         torch::Tensor, // dL_dxy
         torch::Tensor, // dL_dconic
+        torch::Tensor, // dL_db
         torch::Tensor  // dL_dcolors
         >
     nd_rasterize_backward_topk_norm_tensor(
@@ -96,25 +101,28 @@ std::
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
         const torch::Tensor &conics,
+        const torch::Tensor &b,
         const torch::Tensor &colors,
         const torch::Tensor &v_output,  // dL_dout_color
         const torch::Tensor &pixel_topk
     );
 
 std::tuple<
-    torch::Tensor, // out_img 
-    torch::Tensor  // pixel_topk 
+    torch::Tensor, // out_img
+    torch::Tensor  // pixel_topk
 > nd_rasterize_forward_no_tiles_tensor(
     const std::tuple<int, int, int> img_size,
     const unsigned num_points,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
+    const torch::Tensor &b,
     const torch::Tensor &colors
 );
 
 std::tuple<
     torch::Tensor, // dL_dxy
     torch::Tensor, // dL_dconic
+    torch::Tensor, // dL_db
     torch::Tensor  // dL_dcolors
     >
 nd_rasterize_backward_no_tiles_tensor(
@@ -122,6 +130,7 @@ nd_rasterize_backward_no_tiles_tensor(
     const unsigned img_width,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
+    const torch::Tensor &b,
     const torch::Tensor &colors,
     const torch::Tensor &v_output,  // dL_dout_color
     const torch::Tensor &pixel_topk

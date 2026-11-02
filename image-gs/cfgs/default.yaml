@@ -9,6 +9,7 @@ pos_bits:              16 # Bit precision of individual coordinate dimension
 scale_bits:            16 # Bit precision of individual scale dimension
 rot_bits:              16 # Bit precision of Gaussian orientation angle
 feat_bits:             16 # Bit precision of individual feature dimension
+beta_bits:             16 # Bit precision of the Beta-kernel shape parameter
 # Logging
 log_root:              "results"
 exp_name:              "test/anime-1_2k" # Path to the logging directory
@@ -39,6 +40,7 @@ disable_topk_norm:     False # Disable top-K normalization
 disable_inverse_scale: False # Disable inverse Gaussian scale optimization
 ckpt_file:             ""
 disable_color_init:    False
+disable_beta:          False # Disable the Beta Splatting shape parameter (Liu et al., 2025), keeping Gaussians at a fixed b=0
 init_mode:             "gradient" # Gaussian position initialization mode, valid values include "gradient", "saliency", and "random"
 init_random_ratio:     0.3 # Ratio of Gaussians with randomly initialized position
 smap_filter_size:      20 # Gaussian filter size for smoothing saliency maps
@@ -53,6 +55,7 @@ pos_lr:                5.0e-4
 scale_lr:              2.0e-3
 rot_lr:                2.0e-3
 feat_lr:               5.0e-3
+beta_lr:               2.0e-3
 disable_lr_schedule:   False # Disable learning rate schedule and early stopping
 decay_ratio:           10.0
 check_decay_steps:     1000

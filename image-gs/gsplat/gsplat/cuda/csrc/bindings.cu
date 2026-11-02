@@ -184,12 +184,14 @@ std::tuple<
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
+    const torch::Tensor &b,
     const torch::Tensor &colors
 ) {
     CHECK_INPUT(gaussian_ids_sorted);
     CHECK_INPUT(tile_bins);
     CHECK_INPUT(xys);
     CHECK_INPUT(conics);
+    CHECK_INPUT(b);
     CHECK_INPUT(colors);
 
     dim3 tile_bounds_dim3;
@@ -223,6 +225,7 @@ std::tuple<
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
+        b.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
         out_img.contiguous().data_ptr<float>()
     );
@@ -235,6 +238,7 @@ std::
     tuple<
         torch::Tensor, // dL_dxy
         torch::Tensor, // dL_dconic
+        torch::Tensor, // dL_db
         torch::Tensor  // dL_dcolors
         >
     nd_rasterize_backward_tensor(
@@ -246,6 +250,7 @@ std::
         const torch::Tensor &tile_bins,
         const torch::Tensor &xys,
         const torch::Tensor &conics,
+        const torch::Tensor &b,
         const torch::Tensor &colors,
         const torch::Tensor &v_output  // dL_dout_color
     ) {
@@ -273,6 +278,7 @@ std::
 
     torch::Tensor v_xy = torch::zeros({num_points, 2}, xys.options());
     torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
+    torch::Tensor v_b = torch::zeros({num_points, 1}, xys.options());
     torch::Tensor v_colors =
         torch::zeros({num_points, channels}, xys.options());
 
@@ -294,14 +300,16 @@ std::
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
+        b.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
         v_output.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
+        v_b.contiguous().data_ptr<float>(),
         v_colors.contiguous().data_ptr<float>()
     );
     CUDA_CALL(cudaDeviceSynchronize());
-    return std::make_tuple(v_xy, v_conic, v_colors);
+    return std::make_tuple(v_xy, v_conic, v_b, v_colors);
 }
 
 std::tuple<
@@ -315,12 +323,14 @@ std::tuple<
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
+    const torch::Tensor &b,
     const torch::Tensor &colors
 ) {
     CHECK_INPUT(gaussian_ids_sorted);
     CHECK_INPUT(tile_bins);
     CHECK_INPUT(xys);
     CHECK_INPUT(conics);
+    CHECK_INPUT(b);
     CHECK_INPUT(colors);
 
     dim3 tile_bounds_dim3;
@@ -357,6 +367,7 @@ std::tuple<
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
+        b.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
         out_img.contiguous().data_ptr<float>(),
         pixel_topk.contiguous().data_ptr<int32_t>()
@@ -368,6 +379,7 @@ std::tuple<
 std::tuple<
     torch::Tensor, // dL_dxy
     torch::Tensor, // dL_dconic
+    torch::Tensor, // dL_db
     torch::Tensor  // dL_dcolors
     >
 nd_rasterize_backward_topk_norm_tensor(
@@ -379,6 +391,7 @@ nd_rasterize_backward_topk_norm_tensor(
     const torch::Tensor &tile_bins,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
+    const torch::Tensor &b,
     const torch::Tensor &colors,
     const torch::Tensor &v_output,  // dL_dout_color
     const torch::Tensor &pixel_topk
@@ -403,6 +416,7 @@ nd_rasterize_backward_topk_norm_tensor(
     const int channels = colors.size(1);
     torch::Tensor v_xy = torch::zeros({num_points, 2}, xys.options());
     torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
+    torch::Tensor v_b = torch::zeros({num_points, 1}, xys.options());
     torch::Tensor v_colors =
         torch::zeros({num_points, channels}, xys.options());
     nd_rasterize_backward_topk_norm_kernel<<<tile_bounds, block>>>(
@@ -413,15 +427,17 @@ nd_rasterize_backward_topk_norm_tensor(
         (int2 *)tile_bins.contiguous().data_ptr<int>(),
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
+        b.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
         v_output.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
+        v_b.contiguous().data_ptr<float>(),
         v_colors.contiguous().data_ptr<float>(),
         pixel_topk.contiguous().data_ptr<int32_t>()
     );
     CUDA_CALL(cudaDeviceSynchronize());
-    return std::make_tuple(v_xy, v_conic, v_colors);
+    return std::make_tuple(v_xy, v_conic, v_b, v_colors);
 }
 
 std::tuple<
@@ -432,10 +448,12 @@ std::tuple<
     const unsigned num_points,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
+    const torch::Tensor &b,
     const torch::Tensor &colors
 ) {
     CHECK_INPUT(xys);
     CHECK_INPUT(conics);
+    CHECK_INPUT(b);
     CHECK_INPUT(colors);
 
     dim3 block_dim3;
@@ -470,6 +488,7 @@ std::tuple<
         num_points,
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
+        b.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
         out_img.contiguous().data_ptr<float>(),
         pixel_topk.contiguous().data_ptr<int32_t>()
@@ -481,6 +500,7 @@ std::tuple<
 std::tuple<
     torch::Tensor, // dL_dxy
     torch::Tensor, // dL_dconic
+    torch::Tensor, // dL_db
     torch::Tensor  // dL_dcolors
     >
 nd_rasterize_backward_no_tiles_tensor(
@@ -488,6 +508,7 @@ nd_rasterize_backward_no_tiles_tensor(
     const unsigned img_width,
     const torch::Tensor &xys,
     const torch::Tensor &conics,
+    const torch::Tensor &b,
     const torch::Tensor &colors,
     const torch::Tensor &v_output,  // dL_dout_color
     const torch::Tensor &pixel_topk
@@ -506,10 +527,11 @@ nd_rasterize_backward_no_tiles_tensor(
     const dim3 img_size = {img_width, img_height, 1};
     const dim3 grid_size = {(img_width + block_size.x - 1)/block_size.x,
                             (img_height + block_size.y - 1)/block_size.y, 1};
-    
+
     const int channels = colors.size(1);
     torch::Tensor v_xy = torch::zeros({num_points, 2}, xys.options());
     torch::Tensor v_conic = torch::zeros({num_points, 3}, xys.options());
+    torch::Tensor v_b = torch::zeros({num_points, 1}, xys.options());
     torch::Tensor v_colors =
         torch::zeros({num_points, channels}, xys.options());
     nd_rasterize_backward_no_tiles_kernel<<<grid_size, block_size>>>(
@@ -517,15 +539,17 @@ nd_rasterize_backward_no_tiles_tensor(
         channels,
         (float2 *)xys.contiguous().data_ptr<float>(),
         (float3 *)conics.contiguous().data_ptr<float>(),
+        b.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
         v_output.contiguous().data_ptr<float>(),
         (float2 *)v_xy.contiguous().data_ptr<float>(),
         (float3 *)v_conic.contiguous().data_ptr<float>(),
+        v_b.contiguous().data_ptr<float>(),
         v_colors.contiguous().data_ptr<float>(),
         pixel_topk.contiguous().data_ptr<int32_t>()
     );
     CUDA_CALL(cudaDeviceSynchronize());
-    return std::make_tuple(v_xy, v_conic, v_colors);
+    return std::make_tuple(v_xy, v_conic, v_b, v_colors);
 }
 
 

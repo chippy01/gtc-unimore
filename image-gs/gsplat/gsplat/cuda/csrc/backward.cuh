@@ -12,10 +12,12 @@ __global__ void nd_rasterize_backward_kernel(
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
     const float3* __restrict__ conics,
+    const float* __restrict__ b,
     const float* __restrict__ rgbs,
     const float* __restrict__ v_output,
     float2* __restrict__ v_xy,
     float3* __restrict__ v_conic,
+    float* __restrict__ v_b,
     float* __restrict__ v_rgb
 );
 
@@ -27,10 +29,12 @@ __global__ void nd_rasterize_backward_topk_norm_kernel(
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
     const float3* __restrict__ conics,
+    const float* __restrict__ b,
     const float* __restrict__ rgbs,
     const float* __restrict__ v_output,
     float2* __restrict__ v_xy,
     float3* __restrict__ v_conic,
+    float* __restrict__ v_b,
     float* __restrict__ v_rgb,
     int* __restrict__ pixel_topk
 );
@@ -40,10 +44,12 @@ __global__ void nd_rasterize_backward_no_tiles_kernel(
     const unsigned channels,
     const float2* __restrict__ xys,
     const float3* __restrict__ conics,
+    const float* __restrict__ b,
     const float* __restrict__ rgbs,
     const float* __restrict__ v_output,
     float2* __restrict__ v_xy,
     float3* __restrict__ v_conic,
+    float* __restrict__ v_b,
     float* __restrict__ v_rgb,
     int* __restrict__ pixel_topk
 );

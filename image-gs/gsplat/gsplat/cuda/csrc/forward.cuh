@@ -11,6 +11,7 @@ __global__ void nd_rasterize_forward(
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
     const float3* __restrict__ conics,
+    const float* __restrict__ b,
     const float* __restrict__ colors,
     float* __restrict__ out_img
 );
@@ -23,6 +24,7 @@ __global__ void nd_rasterize_forward_topk_norm(
     const int2* __restrict__ tile_bins,
     const float2* __restrict__ xys,
     const float3* __restrict__ conics,
+    const float* __restrict__ b,
     const float* __restrict__ colors,
     float* __restrict__ out_img,
     int* __restrict__ pixel_topk
@@ -34,6 +36,7 @@ __global__ void nd_rasterize_forward_no_tiles(
     const unsigned num_points,
     const float2* __restrict__ xys,
     const float3* __restrict__ conics,
+    const float* __restrict__ b,
     const float* __restrict__ colors,
     float* __restrict__ out_img,
     int* __restrict__ pixel_topk

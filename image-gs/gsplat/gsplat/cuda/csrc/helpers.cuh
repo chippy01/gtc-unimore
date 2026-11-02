@@ -288,6 +288,34 @@ inline __device__ glm::mat2 rotmat2d_gradient(const float rot) {
     return R;
 }
 
+// Beta Splatting kernel (Liu et al., "Deformable Beta Splatting", 2025): a bounded generalization of the
+// Gaussian density used for rasterization weights. r^2 = 2*sigma is the squared Mahalanobis distance (sigma
+// is this codebase's existing 0.5*mahalanobis^2 quantity), beta(b) = 4*exp(b) is a per-Gaussian shape exponent
+// (b=0 gives beta=4, close in shape to a Gaussian). Unlike the Gaussian, the kernel has bounded support: it is
+// exactly zero once r^2 >= 1, i.e. outside the Gaussian's own "1 sigma" ellipse.
+inline __device__ float beta_kernel_alpha(const float sigma, const float b) {
+    const float t = 1.f - 2.f * sigma;
+    return (t > 0.f) ? powf(t, 4.f * __expf(b)) : 0.f;
+}
+
+// Gradient of beta_kernel_alpha() w.r.t. sigma and b, given the already-evaluated alpha = beta_kernel_alpha(sigma, b).
+// t is clamped away from 0 only for the derivatives (t_safe), to avoid inf/NaN from t^(beta-1) and log(t) right at
+// the support boundary; the forward alpha itself still reaches exactly 0 there.
+inline __device__ void beta_kernel_alpha_vjp(
+    const float sigma, const float b, const float alpha, float &dalpha_dsigma, float &dalpha_db
+) {
+    const float t = 1.f - 2.f * sigma;
+    if (t <= 0.f) {
+        dalpha_dsigma = 0.f;
+        dalpha_db = 0.f;
+        return;
+    }
+    const float beta = 4.f * __expf(b);
+    const float t_safe = fmaxf(t, 1e-6f);
+    dalpha_dsigma = -2.f * beta * powf(t_safe, beta - 1.f);
+    dalpha_db = beta * alpha * __logf(t_safe);
+}
+
 // device helper for culling near points
 inline __device__ bool clip_near_plane(
     const float3 p, const float *viewmat, float3 &p_view, float thresh

@@ -4,12 +4,12 @@ from dataclasses import dataclass
 import numpy as np
 
 # File layout (little-endian):
-#   header       magic, image height, image width, number of Gaussians, flags, 4 bit precisions, gamma
+#   header       magic, image height, image width, number of Gaussians, flags, 5 bit precisions, gamma
 #   images       count, then per image: number of channels, name length, UTF-8 name
-#   parameters   xy [N, 2], scale [N, 2], rot [N, 1], feat [N, C], each as min/max (float32) followed by
+#   parameters   xy [N, 2], scale [N, 2], rot [N, 1], feat [N, C], b [N, 1], each as min/max (float32) followed by
 #                its quantization codes bit-packed at its precision, or as raw float32 values when not quantized
 MAGIC = b"GTC1"
-HEADER = struct.Struct("<4sIIIB4Bf")
+HEADER = struct.Struct("<4sIIIB5Bf")
 RANGE = struct.Struct("<2f")
 FLAG_QUANTIZED, FLAG_INVERSE_SCALE, FLAG_TOPK_NORM, FLAG_TILES = 1, 2, 4, 8
 
@@ -20,7 +20,8 @@ class GaussianImage:
     scale: np.ndarray  # [N, 2] scale parameters as optimized (inverse scales unless inverse_scale is False)
     rot: np.ndarray  # [N, 1] rotation angles
     feat: np.ndarray  # [N, C] features of all stacked images
-    bits: tuple  # Bit precisions of (position, scale, rotation, feature), None for float32 parameters
+    b: np.ndarray  # [N, 1] Beta Splatting shape parameters (b=0 is close to a plain Gaussian)
+    bits: tuple  # Bit precisions of (position, scale, rotation, feature, beta), None for float32 parameters
     img_h: int  # Optimization resolution, Gaussian scales are measured in its pixels
     img_w: int
     input_channels: list  # Number of channels of each stacked image
@@ -38,13 +39,13 @@ def save_gtc(path, gaussians):
     quantized = gaussians.bits is not None
     flags = (FLAG_QUANTIZED * quantized + FLAG_INVERSE_SCALE * gaussians.inverse_scale +
              FLAG_TOPK_NORM * gaussians.topk_norm + FLAG_TILES * gaussians.tiles)
-    bits = gaussians.bits if quantized else (32, 32, 32, 32)
+    bits = gaussians.bits if quantized else (32, 32, 32, 32, 32)
     chunks = [HEADER.pack(MAGIC, gaussians.img_h, gaussians.img_w, len(gaussians.xy), flags, *bits, gaussians.gamma),
               struct.pack("<B", len(gaussians.input_channels))]
     for num_channels, fname in zip(gaussians.input_channels, gaussians.image_fnames):
         name = fname.encode("utf-8")
         chunks.append(struct.pack("<BB", num_channels, len(name)) + name)
-    for param, num_bits in zip((gaussians.xy, gaussians.scale, gaussians.rot, gaussians.feat), bits):
+    for param, num_bits in zip((gaussians.xy, gaussians.scale, gaussians.rot, gaussians.feat, gaussians.b), bits):
         param = param.astype(np.float32).reshape(-1)
         if quantized:
             min_val, max_val = float(param.min()), float(param.max())
@@ -74,7 +75,7 @@ def load_gtc(path):
         offset += name_len
     quantized = bool(flags & FLAG_QUANTIZED)
     params = []
-    for dim, num_bits in zip((2, 2, 1, sum(input_channels)), bits):
+    for dim, num_bits in zip((2, 2, 1, sum(input_channels), 1), bits):
         count = num_gaussians * dim
         if quantized:
             min_val, max_val = RANGE.unpack_from(buffer, offset)

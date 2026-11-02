@@ -15,14 +15,14 @@ def decode_gtc(gaussians, render_height=None, device="cuda:0"):
     Render Gaussians loaded with load_gtc() into a [C, H, W] image, H defaults to the optimization resolution.
     Returns the image and the rendering time.
     """
-    xy, scale, rot, feat = [torch.from_numpy(param).to(device) for param in
-                            (gaussians.xy, gaussians.scale, gaussians.rot, gaussians.feat)]
+    xy, scale, rot, feat, b = [torch.from_numpy(param).to(device) for param in
+                              (gaussians.xy, gaussians.scale, gaussians.rot, gaussians.feat, gaussians.b)]
     img_h = gaussians.img_h if render_height is None else render_height
     img_w = round((float(img_h)/gaussians.img_h)*gaussians.img_w)
     block_h, block_w = 16, 16  # Warning: Must match hardcoded value in CUDA kernel, modify with caution
     tile_bounds = ((img_w + block_w - 1) // block_w, (img_h + block_h - 1) // block_h, 1)
     scale = get_pixel_scale(scale, inverse_scale=gaussians.inverse_scale, upsample_ratio=float(img_h)/gaussians.img_h)
-    render_args = (xy, scale, rot, feat, img_h, img_w, tile_bounds, block_h, block_w)
+    render_args = (xy, scale, rot, feat, b, img_h, img_w, tile_bounds, block_h, block_w)
     render_kwargs = dict(bits=gaussians.bits, enable_tiles=gaussians.tiles, enable_topk_norm=gaussians.topk_norm)
     with torch.no_grad():
         num_prep_runs = 2
