@@ -6,6 +6,8 @@
 
 #Texture Files
 RWT*
+# BC1/BC7/ASTC outputs of tools/compare_compression.sh (large)
+non_gaussian_compressions/
 # User-specific files
 *.rsuser
 *.suo
