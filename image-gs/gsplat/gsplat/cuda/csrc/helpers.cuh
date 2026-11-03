@@ -290,11 +290,13 @@ inline __device__ glm::mat2 rotmat2d_gradient(const float rot) {
 
 // Beta Splatting kernel (Liu et al., "Deformable Beta Splatting", 2025): a bounded generalization of the
 // Gaussian density used for rasterization weights. r^2 = 2*sigma is the squared Mahalanobis distance (sigma
-// is this codebase's existing 0.5*mahalanobis^2 quantity), beta(b) = 4*exp(b) is a per-Gaussian shape exponent
-// (b=0 gives beta=4, close in shape to a Gaussian). Unlike the Gaussian, the kernel has bounded support: it is
-// exactly zero once r^2 >= 1, i.e. outside the Gaussian's own "1 sigma" ellipse.
+// is this codebase's existing 0.5*mahalanobis^2 quantity), beta(b) = 4*exp(b) is a per-Gaussian shape exponent.
+// The support ends at r = 2*sqrt(2), so t = 1 - r^2/8 = 1 - sigma/4: with b=0 (beta=4), (1 - r^2/8)^4 closely
+// matches the Gaussian exp(-r^2/2) at the same scale, and the boundary stays inside the 3 sigma tile radius.
+// (A boundary at r = 1 made b=0 act like a Gaussian 0.35x as wide, which pushed b towards flat-topped discs.)
+// Unlike the Gaussian, the kernel is exactly zero outside its support.
 inline __device__ float beta_kernel_alpha(const float sigma, const float b) {
-    const float t = 1.f - 2.f * sigma;
+    const float t = 1.f - 0.25f * sigma;
     return (t > 0.f) ? powf(t, 4.f * __expf(b)) : 0.f;
 }
 
@@ -304,7 +306,7 @@ inline __device__ float beta_kernel_alpha(const float sigma, const float b) {
 inline __device__ void beta_kernel_alpha_vjp(
     const float sigma, const float b, const float alpha, float &dalpha_dsigma, float &dalpha_db
 ) {
-    const float t = 1.f - 2.f * sigma;
+    const float t = 1.f - 0.25f * sigma;
     if (t <= 0.f) {
         dalpha_dsigma = 0.f;
         dalpha_db = 0.f;
@@ -312,7 +314,7 @@ inline __device__ void beta_kernel_alpha_vjp(
     }
     const float beta = 4.f * __expf(b);
     const float t_safe = fmaxf(t, 1e-6f);
-    dalpha_dsigma = -2.f * beta * powf(t_safe, beta - 1.f);
+    dalpha_dsigma = -0.25f * beta * powf(t_safe, beta - 1.f);
     dalpha_db = beta * alpha * __logf(t_safe);
 }
 
