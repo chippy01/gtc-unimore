@@ -27,10 +27,11 @@ def main(args):
     for num_channels, fname in zip(input_channels, image_fnames):
         image = images[curr_channel:curr_channel+num_channels]
         curr_channel += num_channels
-        used = get_uv_mask(args.input_path, fname, image.shape[1:])
+        used = get_uv_mask(args.input_path, fname, image.shape[1:], args.uv_file)
         print(f"'{fname}': {100.0*used.mean():.2f}% of texels used by the mesh")
         for tol in tols:
-            valid = compute_valid_masks(image, [num_channels], [fname], args.input_path, args.mode, tol, args.dilate)[0]
+            valid = compute_valid_masks(image, [num_channels], [fname], args.input_path, args.mode, tol, args.dilate,
+                                        args.uv_file)[0]
             lost = (~valid & used).sum() / max(used.sum(), 1)
             found = (~valid & ~used).sum() / max((~used).sum(), 1)
             label = args.mode if args.mode == "uv" else f"{args.mode} tol {tol:.2f}"
@@ -44,4 +45,6 @@ if __name__ == "__main__":
     parser.add_argument("--tol", type=float, nargs="+", default=None,
                         help="One or more tolerances to compare (default: empty_tol or empty_detail_tol from cfgs/default.yaml)")
     parser.add_argument("--dilate", type=int, default=2, help="Same as main.py --empty_dilate")
+    parser.add_argument("--uv_file", type=str, default="",
+                        help="Ground-truth UV source: an .obj mesh or a mask image (default: the one .obj next to the texture)")
     main(parser.parse_args())
