@@ -94,6 +94,13 @@ class App:
         self.scales = tk.StringVar(value="1 2 4 8 16")
         self.empty_mode = tk.StringVar(value="uv")
         self.tol, self.extra, self.label = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        # On by default: training an 8196x8196 texture does not fit into 8 GB of GPU memory
+        self.cap_enabled, self.cap_size = tk.BooleanVar(value=True), tk.StringVar(value="4096")
+        cap = ttk.Frame(frame)
+        ttk.Checkbutton(cap, text="Cap textures at", variable=self.cap_enabled, command=self._update_cap).pack(side=tk.LEFT)
+        self.cap_entry = ttk.Entry(cap, textvariable=self.cap_size, width=6)
+        self.cap_entry.pack(side=tk.LEFT, padx=(6, 4))
+        ttk.Label(cap, text="px (longest side)").pack(side=tk.LEFT)
         # (label, widget, hint, stretch the widget to the frame width)
         rows = [("Gaussian counts", ttk.Entry(frame, textvariable=self.gaussians),
                  "One Image-GS training run each, empty = none", True),
@@ -106,11 +113,15 @@ class App:
                 ("Extra main.py options", ttk.Entry(frame, textvariable=self.extra),
                  "e.g. --pos_bits=12 --feat_bits=10", True),
                 ("Experiment label", ttk.Entry(frame, textvariable=self.label),
-                 "Empty = derived from the extra options", True)]
+                 "Empty = derived from the extra options", True),
+                ("GPU memory", cap, "Larger textures are scaled down first; results get a _max<px> suffix", False)]
         for index, (text, widget, hint, stretch) in enumerate(rows):
             ttk.Label(frame, text=text).grid(row=2*index, column=0, sticky="w", padx=(0, 8), pady=(6, 0))
             widget.grid(row=2*index, column=1, sticky="we" if stretch else "w", pady=(6, 0))
             self._hint(frame, 2*index + 1, hint)
+
+    def _update_cap(self):
+        self.cap_entry.configure(state=tk.NORMAL if self.cap_enabled.get() else tk.DISABLED)
 
     def _build_run(self, parent):
         buttons = ttk.Frame(parent)
@@ -172,6 +183,11 @@ class App:
         for flag, value in (("-t", tol), ("-x", self.extra.get().strip()), ("-n", self.label.get().strip())):
             if value:
                 command += [flag, value]
+        if self.cap_enabled.get():
+            cap = self.cap_size.get().strip()
+            if not (cap.isdigit() and int(cap) > 0):
+                raise ValueError("The resolution cap must be a positive whole number of pixels")
+            command += ["-r", cap]
         if self.input_kind.get() == "folder":
             target = self.folder.get().strip()
             if not os.path.isdir(target):
