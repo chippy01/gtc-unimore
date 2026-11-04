@@ -30,6 +30,7 @@ downsample_ratio:      2.0
 empty_mode:            "none" # How unused texels are represented, valid values include "none", "grey", "black", "white", "blurred", and "uv" (rasterize the UV charts of the .obj next to the texture)
 empty_tol:             2.0 # Flat fills (grey, black, white): max per-channel distance from the fill colour in 8-bit levels
 empty_detail_tol:      0.25 # Blurred fill: max local detail in 8-bit levels, depends strongly on the texture, check the saved mask
+empty_uv_file:         "" # UV source for "uv": an .obj mesh, or a mask image (white = used). Empty: the one .obj next to the texture
 empty_dilate:          2 # Keep this many pixels of empty texels around used areas so that filtering at chart borders stays correct
 empty_eval_only:       False # Ignore empty areas only in the metrics but still optimize every pixel (baseline for comparison)
 # Gaussians
