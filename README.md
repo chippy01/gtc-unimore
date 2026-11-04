@@ -9,9 +9,10 @@ Textures are compressed into a set of colored 2D Gaussians with [Image-GS](https
 | `image-gs/` | Image-GS engine with the changes described below |
 | `image-gs/utils/mask_utils.py` | Empty-area detection (new) |
 | `image-gs/utils/gtc_utils.py` | Compressed `.gtc` file format (new) |
-| `tools/` | Standalone scripts: comparison against BC1/BC7/ASTC, `.gtc` decoder, mask accuracy check (new), see [Tools](#tools) |
+| `tools/` | Standalone scripts: GUI, comparison against BC1/BC7/ASTC, `.gtc` decoder, mask accuracy check (new), see [Tools](#tools) |
 | `non_gaussian_compressions/` | BC1, BC7 and ASTC files written by the comparison. Not tracked by git |
 | `comparisons/` | Metrics tables and plots written by the comparison |
+| `capped_textures/` | Scaled-down copies of textures larger than the comparison's `-r` cap. Not tracked by git |
 | `image-gs/cfgs/default.yaml` | All settings and their defaults, every key is also a command-line flag |
 | `RWT78/`, `RWT79/`, `RWT81/`, `RWT85/` | Test textures with their meshes, from the *Real-World Textured Things* (RWTT) dataset. Not tracked by git, copy them in by hand |
 
@@ -67,12 +68,13 @@ python main.py --data_root=.. --input_path="RWT79" --exp_name="rwt79" --num_gaus
 | `black` | Flat black fill (RWT85) | Within `--empty_tol` of black |
 | `white` | Flat white fill | Within `--empty_tol` of white |
 | `blurred` | Smeared, blurred fill (RWT79, RWT81) | Local fine detail below `--empty_detail_tol` |
-| `uv` | Anything | Rasterizes the UV charts of the `.obj` in the texture's folder (exact) |
+| `uv` | Anything | Rasterizes the UV charts of the `.obj` in the texture's folder (exact), or of `--empty_uv_file` |
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--empty_tol` | `2.0` | Flat fills: maximum per-channel distance from the fill colour, in 8-bit levels |
 | `--empty_detail_tol` | `0.25` | Blurred fill: maximum local detail, in 8-bit levels. Depends strongly on the texture |
+| `--empty_uv_file` | none | UV source for `uv` when the mesh is not the only `.obj` next to the texture: any `.obj` mesh, or a mask image (white = used, black = empty, resized to the texture if needed). A mask works for meshes in any format, e.g. Blender's *UV › Export UV Layout* with *Fill Opacity* 1 |
 | `--empty_dilate` | `2` | Pixels of empty texels kept around used areas, so texture filtering at chart borders stays correct |
 | `--empty_eval_only` | off | Detect empty areas for the metrics only, but still optimize every pixel (baseline) |
 
@@ -134,35 +136,54 @@ python ../tools/decode.py results/rwt79/<run-folder>/gaussians.gtc --render_heig
 tools/compare_compression.sh RWT79                         # defaults: 2500 to 40000 Gaussians, 'uv' mask
 tools/compare_compression.sh -g "5000 20000" -m black RWT85
 tools/compare_compression.sh -m blurred -t 0.5 RWT79/ufo_crashste_brno_DiffuseMap.png
+tools/compare_compression.sh -u ~/meshes/chair.obj ~/textures/chair_albedo.png   # texture and mesh anywhere
+tools/compare_compression.sh -x "--pos_bits=12 --feat_bits=10" RWT79                # other main.py options
 ```
 
 | Option | Default | Meaning |
 |---|---|---|
-| `-g` | `"2500 5000 10000 20000 40000"` | Gaussian counts, one Image-GS training run each |
+| `-g` | `"2500 5000 10000 20000 40000"` | Gaussian counts, one Image-GS training run each. `""` skips Image-GS and scores only existing runs |
 | `-s` | `"1 2 4 8 16"` | Downscaling factors for BC/ASTC, `4` compresses the texture at 1/4 of its width and height |
 | `-m` | `uv` | Empty-area mode, used for training and for scoring every method |
 | `-t` | `main.py` default | Tolerance for `-m`: `--empty_detail_tol` for `blurred`, `--empty_tol` otherwise |
+| `-u` | `.obj` next to the texture | UV source for `-m uv`, see `--empty_uv_file` |
+| `-x` | none | Extra `main.py` options for the Image-GS runs, space-separated. Use `-m`, `-t` and `-u` for the empty-area options, so training and scoring use the same mask |
+| `-n` | derived from `-x` | Label added to the run and comparison folder names (e.g. `-x "--pos_bits=12"` gives `_pos_bits-12`) |
+| `-r` | no limit | Resolution cap: textures whose longest side exceeds it are scaled down to it first, to fit GPU memory. See below |
 
 Given a folder, every image in it is compared on its own (RWT78 gives four comparisons). An Image-GS run at 4096² takes about 7 minutes or more, and more Gaussians take longer. The BC/ASTC encodes take under a minute, and scoring about one more. Runs that already have a `gaussians.gtc` are reused, so after an interruption only the missing counts are trained. Delete a run folder to retrain it.
 
 | Folder | Content |
 |---|---|
-| `image-gs/results/compare/<texture>/<image>_empty-<mode>/` | One Image-GS run per Gaussian count |
+| `image-gs/results/compare/<texture>/<image>_empty-<mode>[_<label>]/` | One Image-GS run per Gaussian count |
 | `non_gaussian_compressions/<texture>/<image>/` | `<codec>_<W>x<H>.dds` / `.astc` files, their decoded `.png`, and `baselines.csv` |
-| `comparisons/<texture>/<image>/` | `metrics.csv` (every result), `rd_curves.png` (PSNR, SSIM, LPIPS, FLIP against bits per texel) and `sizes.png` (file size of every full-resolution result, next to the uncompressed size and the original file) |
+| `comparisons/<texture>/<image>[_<label>]/` | `metrics.csv` (every result), `rd_curves.png` (PSNR, SSIM, LPIPS, FLIP against bits per texel) and `sizes.png` (file size of every full-resolution result, next to the uncompressed size and the original file) |
 
 How results are measured:
 - **Size** is the compressed file on disk (`.gtc`, `.dds`, `.astc`, headers included), as bits per texel of the original resolution. No method stores mipmaps.
 - **Quality:** every method is decoded at the original resolution and scored against the original on the mask from `-m`, with the same metrics as training.
 - **Lower resolutions:** at full resolution, BC1 is 4 bpp, BC7 8 bpp and ASTC 8 to 0.89 bpp, far above Image-GS (about 0.02 to 0.3 bpp). A smaller texture is what an engine would ship at those sizes. Downscaling uses area filtering, like mipmaps, and decoded results are upscaled bilinearly, like GPU magnification.
 - **Encoders:** BC1 and BC7 by `etcpak` (BC7 through its bc7enc encoder at default settings), ASTC by ARM's `astc-encoder` at its *thorough* preset. Everything is decoded by the independent `texture2ddecoder`, and the `.dds` files also open correctly in Pillow. `etcpak`'s BC1 encoder is tuned for speed, so it scores about 1 dB below the best BC1 encoders.
-- **Very large textures** such as RWT81 (8196²) may not fit LPIPS and FLIP into 8 GB of GPU memory. Those values are then left empty, with a warning.
+- **Very large textures:** GPU memory grows with the texture's pixel count, not with the number of Gaussians. Training RWT81 at its native 8196² needs more than 8 GB, while at 4096² it peaks at about 5.5 GB. `-r 4096` scales such textures down once, with area filtering, into `capped_textures/<cap>/<texture>/`. The copy keeps its filename and gets the mesh files linked next to it, so `uv` mode keeps working. Training, BC/ASTC and scoring all use that 8-bit copy, and the results get a `_max<cap>` suffix (e.g. `rhodochrosite_max4096`) so they never mix with full-resolution ones. Textures at or below the cap are left alone and keep their names. Without a cap, LPIPS and FLIP that don't fit into GPU memory are left empty, with a warning.
+
+### GUI
+`tools/gui.py` is a small window around `compare_compression.sh`:
+
+```bash
+tools/gui.py
+```
+
+- **Left:** choose a texture folder (e.g. RWT85), or a texture file plus a UV map (`.obj` or mask image). Set every option of the script, run or stop it, and follow the log live. *Cap textures at 4096 px* (`-r`) is ticked by default, since larger textures don't fit into an 8 GB GPU.
+- **Right:** pick any finished comparison and view `rd_curves.png` and `sizes.png`. Double-click a plot to open it full size, or use *Open folder*. A finished run selects its comparison automatically.
+
+It runs on the system Python on purpose, because the conda environment's Tk only has blurry bitmap fonts. It needs `python3-tkinter` and `python3-pillow-tk` (both installed by default on Fedora). The comparison itself still runs in the `image-gs` environment, which the script activates on its own.
 
 ## Tools
-Standalone scripts in `tools/`. They need the `image-gs` conda environment and work from any folder. The examples below run from the repository root.
+Standalone scripts in `tools/`. They need the `image-gs` conda environment and work from any folder, except `gui.py` (see [GUI](#gui)). The examples below run from the repository root.
 
 | Script | Purpose |
 |---|---|
+| `gui.py` | Window for running comparisons and viewing their plots, see [GUI](#gui) |
 | `compare_compression.sh` | Full comparison against BC1, BC7 and ASTC, see [above](#comparing-against-bc1-bc7-and-astc) |
 | `baseline_codecs.py` | BC1, BC7 and ASTC encoding at several resolutions (called by `compare_compression.sh`) |
 | `plot_compression.py` | Scoring and plotting of all methods (called by `compare_compression.sh`) |
@@ -176,7 +197,7 @@ python tools/eval_masks.py RWT85 --mode black
 python tools/eval_masks.py RWT79 --mode blurred --tol 0.25 0.5 0.75
 ```
 
-For each image, `eval_masks.py` prints the share of ignored texels, of used texels wrongly ignored ("used lost") and of unused texels caught ("empty found"). `--dilate` matches `main.py --empty_dilate`. The texture's folder must contain exactly one `.obj` file.
+For each image, `eval_masks.py` prints the share of ignored texels, of used texels wrongly ignored ("used lost") and of unused texels caught ("empty found"). `--dilate` matches `main.py --empty_dilate`. The ground truth comes from the one `.obj` in the texture's folder, or from `--uv_file` (an `.obj` or a mask image).
 
 ## Outputs
 Each run writes to `image-gs/results/<exp_name>/<settings>/`. The settings part of the name includes the empty-area options (e.g. `..._empty-uv-dil-2_...`), so runs with different settings never overwrite each other. **Rerunning with identical settings deletes the previous run folder.**

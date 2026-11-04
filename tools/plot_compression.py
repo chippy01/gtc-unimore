@@ -152,7 +152,8 @@ def main(args):
     mask = None
     if args.empty_mode != "none":
         tol = args.empty_detail_tol if args.empty_mode == "blurred" else args.empty_tol
-        mask = compute_valid_masks(gt, input_channels, image_fnames, args.image, args.empty_mode, tol, args.empty_dilate)
+        mask = compute_valid_masks(gt, input_channels, image_fnames, args.image, args.empty_mode, tol, args.empty_dilate,
+                                   args.empty_uv_file)
         mask = torch.from_numpy(mask).to(device)
         print(f"Scoring on used texels only ('{args.empty_mode}' mask, {100.0*mask[0].float().mean().item():.2f}% of texels)")
     gt_images = torch.from_numpy(gt).to(device)
@@ -216,6 +217,7 @@ if __name__ == "__main__":
     parser.add_argument("--empty_mode", type=str, default="none", help="Same as main.py --empty_mode")
     parser.add_argument("--empty_tol", type=float, default=2.0, help="Same as main.py --empty_tol")
     parser.add_argument("--empty_detail_tol", type=float, default=0.25, help="Same as main.py --empty_detail_tol")
+    parser.add_argument("--empty_uv_file", type=str, default="", help="Same as main.py --empty_uv_file")
     parser.add_argument("--empty_dilate", type=int, default=2, help="Same as main.py --empty_dilate")
     parser.add_argument("--device", type=str, default="cuda:0")
     main(parser.parse_args())

@@ -11,10 +11,11 @@ DETAIL_WINDOW = 15  # Window size (pixels) for averaging local detail
 MIN_EMPTY_AREA = 1e-4  # Empty regions smaller than this fraction of the image are kept (e.g. dark specks inside charts)
 
 
-def compute_valid_masks(images, input_channels, image_fnames, load_path, mode, tol, dilate):
+def compute_valid_masks(images, input_channels, image_fnames, load_path, mode, tol, dilate, uv_file=""):
     """
     Detect texels that hold real content (True) as opposed to empty texture space (False).
     images: [C, H, W] array in [0, 1] (display space) holding one or more stacked images.
+    uv_file: UV source for mode "uv", see get_uv_mask().
     Returns a [C, H, W] bool array where each image's mask is repeated over its channels.
     """
     if mode not in EMPTY_MODES:
@@ -25,7 +26,7 @@ def compute_valid_masks(images, input_channels, image_fnames, load_path, mode, t
         image = images[curr_channel:curr_channel+num_channels].transpose(1, 2, 0)
         curr_channel += num_channels
         if mode == "uv":
-            valid = get_uv_mask(load_path, fname, image.shape[:2])
+            valid = get_uv_mask(load_path, fname, image.shape[:2], uv_file)
         else:
             empty = detect_empty(image, mode, tol)
             empty = remove_small_regions(empty, min_area=MIN_EMPTY_AREA*empty.size)
@@ -86,13 +87,29 @@ def masked_mean(values, mask=None):
     return (values * mask).sum() / mask.sum().clamp(min=1)
 
 
-def get_uv_mask(load_path, fname, shape):
-    """Rasterize the UV charts of the .obj mesh stored next to the texture."""
-    folder = load_path if os.path.isdir(load_path) else os.path.dirname(load_path)
-    obj_files = sorted(f for f in os.listdir(folder) if f.lower().endswith(".obj"))
-    if len(obj_files) != 1:
-        raise FileNotFoundError(f"empty_mode 'uv' needs exactly one .obj file in '{folder}' but found {len(obj_files)}")
-    uvs, faces_per_mtl, mtl_files = load_obj_uvs(os.path.join(folder, obj_files[0]))
+def get_uv_mask(load_path, fname, shape, uv_file=""):
+    """
+    Mark the texels covered by UV charts. uv_file is either an .obj mesh whose charts are rasterized, or a mask
+    image (white = used, black = empty, resized to the texture if needed). Without uv_file, the one .obj mesh
+    next to the texture is used.
+    """
+    if uv_file and not uv_file.lower().endswith(".obj"):
+        mask = cv2.imread(uv_file, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise FileNotFoundError(f"Cannot read UV mask image '{uv_file}'")
+        if mask.shape != tuple(shape):
+            mask = cv2.resize(mask, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
+        return mask > 127
+    if uv_file:
+        obj_path = uv_file
+    else:
+        folder = load_path if os.path.isdir(load_path) else os.path.dirname(load_path)
+        obj_files = sorted(f for f in os.listdir(folder) if f.lower().endswith(".obj"))
+        if len(obj_files) != 1:
+            raise FileNotFoundError(f"empty_mode 'uv' needs exactly one .obj file in '{folder}' but found {len(obj_files)}")
+        obj_path = os.path.join(folder, obj_files[0])
+    folder = os.path.dirname(os.path.abspath(obj_path))  # .mtl files are referenced relative to the .obj
+    uvs, faces_per_mtl, mtl_files = load_obj_uvs(obj_path)
     tex_per_mtl = {}
     for mtl_file in mtl_files:
         if os.path.isfile(os.path.join(folder, mtl_file)):
@@ -102,7 +119,7 @@ def get_uv_mask(load_path, fname, shape):
     if len(faces) == 0 and len(faces_per_mtl) == 1:  # Single-material mesh without a usable texture reference
         faces = next(iter(faces_per_mtl.values()))
     if len(faces) == 0:
-        raise ValueError(f"No face of '{obj_files[0]}' uses texture '{fname}'")
+        raise ValueError(f"No face of '{os.path.basename(obj_path)}' uses texture '{fname}'")
     height, width = shape
     shift = 4  # Sub-pixel precision bits for cv2.fillPoly
     mask = np.zeros(shape, dtype=np.uint8)

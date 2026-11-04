@@ -143,6 +143,7 @@ class GaussianSplatting2D(nn.Module):
             self.downsample_ratio = float(args.downsample_ratio)
         self.empty_mode = args.empty_mode
         self.empty_tol = args.empty_detail_tol if self.empty_mode == "blurred" else args.empty_tol
+        self.empty_uv_file = args.empty_uv_file
         self.empty_dilate = args.empty_dilate
         self.empty_eval_only = args.empty_eval_only
         self.block_h, self.block_w = 16, 16  # Warning: Must match hardcoded value in CUDA kernel, modify with caution
@@ -178,7 +179,7 @@ class GaussianSplatting2D(nn.Module):
 
     def _compute_valid_mask(self, path):
         masks = compute_valid_masks(np.power(self.gt_images, 1.0/self.gamma), self.input_channels, self.image_fnames, path,
-                                    self.empty_mode, self.empty_tol, self.empty_dilate)
+                                    self.empty_mode, self.empty_tol, self.empty_dilate, self.empty_uv_file)
         self.valid_mask = torch.from_numpy(masks).to(device=self.device)
         curr_channel = 0
         for fname, num_channels in zip(self.image_fnames, self.input_channels):
