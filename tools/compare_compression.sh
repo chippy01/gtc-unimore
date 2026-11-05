@@ -154,7 +154,8 @@ for SOURCE in "${IMAGES[@]}"; do
     echo "=== $TEXTURE / $NAME$SUFFIX"
 
     for N in $GAUSSIANS; do
-        if compgen -G "$ROOT/image-gs/results/$EXP_NAME/num-${N}_*/gaussians.gtc" > /dev/null; then
+        # Beta Splatting runs ("_beta_" in the folder name, from the feat_beta_splatting branch) are not reused
+        if compgen -G "$ROOT/image-gs/results/$EXP_NAME/num-${N}_*/gaussians.gtc" | grep -v "_beta_" > /dev/null; then
             echo "--- Image-GS, $N Gaussians: reusing the existing run"
             continue
         fi

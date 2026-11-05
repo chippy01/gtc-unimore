@@ -10,6 +10,8 @@ import numpy as np
 #                its quantization codes bit-packed at its precision, or as raw float32 values when not quantized
 MAGIC = b"GTC1"
 HEADER = struct.Struct("<4sIIIB4Bf")
+# The feat_beta_splatting branch writes the same magic with a fifth bit precision and a fifth tensor, b [N, 1]
+BETA_HEADER = struct.Struct("<4sIIIB5Bf")
 RANGE = struct.Struct("<2f")
 FLAG_QUANTIZED, FLAG_INVERSE_SCALE, FLAG_TOPK_NORM, FLAG_TILES = 1, 2, 4, 8
 
@@ -57,34 +59,56 @@ def save_gtc(path, gaussians):
 
 
 def load_gtc(path):
+    """
+    Read a .gtc file. Raises ValueError for anything else, including Beta Splatting files, which share the magic.
+    """
     with open(path, "rb") as file:
         buffer = file.read()
-    magic, img_h, img_w, num_gaussians, flags, *bits, gamma = HEADER.unpack_from(buffer, 0)
-    if magic != MAGIC:
-        raise ValueError(f"'{path}' is not a .gtc file")
-    offset = HEADER.size
-    num_images = buffer[offset]
-    offset += 1
-    input_channels, image_fnames = [], []
-    for _ in range(num_images):
-        num_channels, name_len = struct.unpack_from("<BB", buffer, offset)
-        offset += 2
-        input_channels.append(num_channels)
-        image_fnames.append(buffer[offset:offset+name_len].decode("utf-8"))
-        offset += name_len
-    quantized = bool(flags & FLAG_QUANTIZED)
-    params = []
-    for dim, num_bits in zip((2, 2, 1, sum(input_channels)), bits):
-        count = num_gaussians * dim
-        if quantized:
-            min_val, max_val = RANGE.unpack_from(buffer, offset)
-            codes, offset = unpack_codes(buffer, offset+RANGE.size, count, num_bits)
-            param = dequantize(codes, num_bits, min_val, max_val)
-        else:
-            param = np.frombuffer(buffer, dtype="<f4", count=count, offset=offset).astype(np.float32)
-            offset += 4 * count
-        params.append(param.reshape(num_gaussians, dim))
-    return GaussianImage(*params, bits=tuple(bits) if quantized else None, img_h=img_h, img_w=img_w,
+    gaussians = parse_gtc(buffer, HEADER)
+    if gaussians is None:
+        if parse_gtc(buffer, BETA_HEADER) is not None:
+            raise ValueError(f"'{path}' holds Beta Splatting primitives, written by the feat_beta_splatting branch, "
+                             "which this branch cannot decode")
+        raise ValueError(f"'{path}' is not a valid .gtc file")
+    return gaussians
+
+
+def parse_gtc(buffer, header):
+    """
+    Parse buffer with the given header layout, or return None if the buffer does not match it exactly. Only the
+    first four tensors are kept, a fifth (Beta Splatting's b) is read just to check the layout.
+    """
+    try:
+        magic, img_h, img_w, num_gaussians, flags, *bits, gamma = header.unpack_from(buffer, 0)
+        if magic != MAGIC:
+            return None
+        offset = header.size
+        num_images = buffer[offset]
+        offset += 1
+        input_channels, image_fnames = [], []
+        for _ in range(num_images):
+            num_channels, name_len = struct.unpack_from("<BB", buffer, offset)
+            offset += 2
+            input_channels.append(num_channels)
+            image_fnames.append(buffer[offset:offset+name_len].decode("utf-8"))
+            offset += name_len
+        quantized = bool(flags & FLAG_QUANTIZED)
+        params = []
+        for dim, num_bits in zip((2, 2, 1, sum(input_channels), 1), bits):
+            count = num_gaussians * dim
+            if quantized:
+                min_val, max_val = RANGE.unpack_from(buffer, offset)
+                codes, offset = unpack_codes(buffer, offset+RANGE.size, count, num_bits)
+                param = dequantize(codes, num_bits, min_val, max_val)
+            else:
+                param = np.frombuffer(buffer, dtype="<f4", count=count, offset=offset).astype(np.float32)
+                offset += 4 * count
+            params.append(param.reshape(num_gaussians, dim))
+    except (IndexError, struct.error, UnicodeDecodeError, ValueError):  # Read past the end, or bytes that are no name
+        return None
+    if offset != len(buffer):
+        return None
+    return GaussianImage(*params[:4], bits=tuple(bits[:4]) if quantized else None, img_h=img_h, img_w=img_w,
                          input_channels=input_channels, image_fnames=image_fnames, gamma=gamma,
                          inverse_scale=bool(flags & FLAG_INVERSE_SCALE), topk_norm=bool(flags & FLAG_TOPK_NORM),
                          tiles=bool(flags & FLAG_TILES))

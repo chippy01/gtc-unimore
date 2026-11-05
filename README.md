@@ -151,16 +151,19 @@ tools/compare_compression.sh -x "--pos_bits=12 --feat_bits=10" RWT79            
 | `-n` | derived from `-x` | Label added to the run and comparison folder names (e.g. `-x "--pos_bits=12"` gives `_pos_bits-12`) |
 | `-r` | no limit | Resolution cap: textures whose longest side exceeds it are scaled down to it first, to fit GPU memory. See below |
 
-Given a folder, every image in it is compared on its own (RWT78 gives four comparisons). An Image-GS run at 4096² takes about 7 minutes or more, and more Gaussians take longer. The BC/ASTC encodes take under a minute, and scoring about one more. Runs that already have a `gaussians.gtc` are reused, so after an interruption only the missing counts are trained. Delete a run folder to retrain it.
+Given a folder, every image in it is compared on its own (RWT78 gives four comparisons). An Image-GS run at 4096² takes about 7 minutes or more, and more Gaussians take longer. The BC/ASTC encodes take under a minute, and scoring about one more. Runs that already have a `gaussians.gtc` are reused, so after an interruption only the missing counts are trained. Delete a run folder to retrain it. Beta Splatting runs from the `feat_beta_splatting` branch are never reused, and scoring skips them with a warning: this branch cannot decode them.
 
 | Folder | Content |
 |---|---|
 | `image-gs/results/compare/<texture>/<image>_empty-<mode>[_<label>]/` | One Image-GS run per Gaussian count |
 | `non_gaussian_compressions/<texture>/<image>/` | `<codec>_<W>x<H>.dds` / `.astc` files, their decoded `.png`, and `baselines.csv` |
-| `comparisons/<texture>/<image>[_<label>]/` | `metrics.csv` (every result), `rd_curves.png` (PSNR, SSIM, LPIPS, FLIP against bits per texel) and `sizes.png` (file size of every full-resolution result, next to the uncompressed size and the original file) |
+| `comparisons/<texture>/<image>[_<label>]/` | `metrics.csv` (every result with its three sizes), `rd_curves.png` (PSNR, SSIM, LPIPS, FLIP against the size of the compressed file) and `sizes.png` (size on disk and in GPU memory of every full-resolution result, next to the original file and an uncompressed texture) |
 
 How results are measured:
-- **Size** is the compressed file on disk (`.gtc`, `.dds`, `.astc`, headers included), as bits per texel of the original resolution. No method stores mipmaps.
+- **Size** (`rd_curves.png`): the compressed file as stored (`.gtc`, `.dds`, `.astc`, headers included). For BC/ASTC this is also their size in GPU memory, for `.gtc` only its size on disk, so `sizes.png` adds both sizes for every result at full resolution:
+- **Size on disk** (`sizes.png`, filled markers): every compressed file (`.gtc`, `.dds`, `.astc`, headers included) compressed losslessly with Zstd -19, the supercompression step a shipping pipeline adds after BC/ASTC encoding. Zstd shrinks BC/ASTC a lot where the texture repeats, e.g. RWT85's flat black areas (BC1 to 19% of its size), and little on detailed or blurred textures (RWT79: 70 to 93%). It shrinks `.gtc` by only 1 to 6%: its quantized Gaussian parameters are all different and have almost no repetition left to remove. No texture is otherwise prepared for Zstd (no RDO encoding, no flattening of empty areas, no reordering of the Gaussians).
+- **Size in GPU memory** (`sizes.png`, hollow markers): BC/ASTC files as they are, since the hardware samples them directly. A `.gtc` must be either decoded into a normal texture, which saves no GPU memory, or sampled by a shader. The shader needs, besides the Gaussians, a list of the Gaussians covering each 16×16 px tile (the rasterizer's tiles). The plot counts these lists at the texture's resolution: one Gaussian id per (Gaussian, tile) pair, 16-bit up to 65536 Gaussians and 32-bit above, which explains the jump at 70000 Gaussians, plus a 32-bit offset per tile. Larger tiles give smaller lists but more Gaussians to evaluate per sample (`plot_compression.py --table_tile 64`).
+- Sizes are bits per texel of the original resolution. No method stores mipmaps.
 - **Quality:** every method is decoded at the original resolution and scored against the original on the mask from `-m`, with the same metrics as training.
 - **Lower resolutions:** at full resolution, BC1 is 4 bpp, BC7 8 bpp and ASTC 8 to 0.89 bpp, far above Image-GS (about 0.02 to 0.3 bpp). A smaller texture is what an engine would ship at those sizes. Downscaling uses area filtering, like mipmaps, and decoded results are upscaled bilinearly, like GPU magnification.
 - **Encoders:** BC1 and BC7 by `etcpak` (BC7 through its bc7enc encoder at default settings), ASTC by ARM's `astc-encoder` at its *thorough* preset. Everything is decoded by the independent `texture2ddecoder`, and the `.dds` files also open correctly in Pillow. `etcpak`'s BC1 encoder is tuned for speed, so it scores about 1 dB below the best BC1 encoders.
@@ -186,7 +189,7 @@ Standalone scripts in `tools/`. They need the `image-gs` conda environment and w
 | `gui.py` | Window for running comparisons and viewing their plots, see [GUI](#gui) |
 | `compare_compression.sh` | Full comparison against BC1, BC7 and ASTC, see [above](#comparing-against-bc1-bc7-and-astc) |
 | `baseline_codecs.py` | BC1, BC7 and ASTC encoding at several resolutions (called by `compare_compression.sh`) |
-| `plot_compression.py` | Scoring and plotting of all methods (called by `compare_compression.sh`) |
+| `plot_compression.py` | Scoring and plotting of all methods (called by `compare_compression.sh`). `--replot` redoes only the sizes and plots from an existing `metrics.csv`, in seconds and without the GPU |
 | `decode.py` | Render a `.gtc` file into images, see [The compressed file](#the-compressed-file) |
 | `eval_masks.py` | Score empty-area detection against the exact UV mask rasterized from the texture's mesh |
 
