@@ -1,6 +1,7 @@
 """
 Score Image-GS (.gtc files) and GPU block formats (tools/baseline_codecs.py output) against the original texture,
-on the same empty-area mask that main.py uses, then plot quality against two sizes:
+on the same empty-area mask that main.py uses, then plot quality against the size of the compressed file. The size
+of every full-resolution result is also plotted two more ways:
   on disk         every file compressed losslessly with Zstd, the supercompression step of a shipping pipeline
   in GPU memory   BC/ASTC as the hardware samples them; Image-GS as its Gaussians plus the per-tile Gaussian lists a
                   shader needs to sample them directly
@@ -289,7 +290,7 @@ def main(args):
     metrics_path = os.path.join(args.out_dir, "metrics.csv")
     rows = read_rows(metrics_path) if args.replot else score_all(args, gt, input_channels, image_fnames)
     rows = add_sizes(rows, height, width, args.zstd_level, args.table_tile)
-    rows.sort(key=lambda row: (list(SERIES).index(row["method"]), row["zstd_bpp"]))
+    rows.sort(key=lambda row: (list(SERIES).index(row["method"]), row["bpp"]))
     os.makedirs(args.out_dir, exist_ok=True)
     with open(metrics_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=FIELDS)
@@ -305,17 +306,14 @@ def main(args):
     scales = max(width // min(row["width"] for row in rows), 1)
     common = (f"{width}x{height} texture, scored on {scored_on}. BC/ASTC points are the texture compressed at "
               f"1/1 to 1/{scales} resolution and upscaled bilinearly.")
-    plot(rows, "zstd_bpp", f"{name}: quality against size on disk",
-         f"Every file compressed losslessly with Zstd -{args.zstd_level:d}, as a shipping pipeline does after "
-         f"BC/ASTC encoding.\n{common}", os.path.join(args.out_dir, "rd_zstd.png"))
-    plot(rows, "gpu_bpp", f"{name}: quality against GPU memory",
-         f"BC/ASTC as the hardware samples them. Image-GS: its Gaussians plus the {args.table_tile}x{args.table_tile} px "
-         f"tile lists a shader needs to sample them directly.\n{common}", os.path.join(args.out_dir, "rd_gpu.png"))
+    plot(rows, "bpp", f"{name}: quality against size",
+         f"Size: the compressed file as stored (.gtc, .dds, .astc, headers included). Its size on disk with Zstd and in "
+         f"GPU memory: sizes.png\n{common}", os.path.join(args.out_dir, "rd_curves.png"))
     plot_sizes(rows, args.image, width, height, f"{name}: size of each {width}x{height} result",
                f"Filled: on disk, compressed with Zstd -{args.zstd_level:d}. Hollow: in GPU memory, Image-GS with its "
                f"{args.table_tile}x{args.table_tile} px tile lists. Headers included.",
                os.path.join(args.out_dir, "sizes.png"))
-    print(f"Saved 'metrics.csv', 'rd_zstd.png', 'rd_gpu.png' and 'sizes.png' in '{args.out_dir}'")
+    print(f"Saved 'metrics.csv', 'rd_curves.png' and 'sizes.png' in '{args.out_dir}'")
 
 
 if __name__ == "__main__":
