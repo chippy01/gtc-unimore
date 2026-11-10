@@ -100,11 +100,12 @@ Measured against masks rasterized from the meshes. "Used lost" is real content w
 |---|---|---|---|---|
 | RWT78 `tex_0` | `grey` | 0% | 47% | The paper patches hold image content but no face uses them, so only `uv` finds them |
 | RWT79 | `blurred` 0.5 | 0% | 54% | 0.25 finds almost nothing, higher values start losing content |
-| RWT81 | `blurred` 0.25 | 1.7% | 80% | Real content is nearly as smooth as the fill, 0.5 loses about a third of it |
+| RWT81 (4096² copy) | `blurred` 0.25 | 0.6% | 79% | Real content is nearly as smooth as the fill, 0.5 already loses 10% of it |
 | RWT85 | `black` | 44% | 57% | Unphotographed faces are pure black, so they are ignored too and render as smeared colour |
-| All | `uv` | 0% | 96–99.6% | Exact, the rest is the `--empty_dilate` margin |
+| RWT354 | `black` | 0% | 58% | Black fill with no black content; `grey` finds the same, `blurred` loses more and finds less |
+| All | `uv` | 0% | 94–99.6% | Exact, the rest is the `--empty_dilate` margin |
 
-To reproduce these numbers or test other tolerances, use `tools/eval_masks.py` (see [Tools](#tools)).
+To reproduce these numbers or test other tolerances, use `tools/eval_masks.py` (see [Tools](#tools)). Every mode on every test texture, with a sweep of the `blurred` tolerance, is in `comparisons/empty_detection/detection.csv`.
 
 ### Notes
 - **RWT78** holds four separate atlases (`tex_0.png` … `tex_3.png`), not material maps of one surface. Run each file on its own instead of the folder.
@@ -198,9 +199,11 @@ Standalone scripts in `tools/`. They need the `image-gs` conda environment and w
 python tools/eval_masks.py RWT85 --mode black
 # Several tolerances in one go
 python tools/eval_masks.py RWT79 --mode blurred --tol 0.25 0.5 0.75
+# Every mode, also written to a table (a re-run replaces its own rows)
+python tools/eval_masks.py RWT85/mayakey.png --mode grey black white blurred uv --csv comparisons/empty_detection/detection.csv
 ```
 
-For each image, `eval_masks.py` prints the share of ignored texels, of used texels wrongly ignored ("used lost") and of unused texels caught ("empty found"). `--dilate` matches `main.py --empty_dilate`. The ground truth comes from the one `.obj` in the texture's folder, or from `--uv_file` (an `.obj` or a mask image).
+For each image and mode, `eval_masks.py` prints the share of ignored texels, of used texels wrongly ignored ("used lost") and of unused texels caught ("empty found"). `--dilate` matches `main.py --empty_dilate`. The ground truth comes from the one `.obj` in the texture's folder, or from `--uv_file` (an `.obj` or a mask image).
 
 ## Outputs
 Each run writes to `image-gs/results/<exp_name>/<settings>/`. The settings part of the name includes the empty-area options (e.g. `..._empty-uv-dil-2_...`), so runs with different settings never overwrite each other. **Rerunning with identical settings deletes the previous run folder.**
